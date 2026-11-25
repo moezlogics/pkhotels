@@ -1,0 +1,315 @@
+ // apps/api/src/storage/storage.service.ts
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { randomUUID } from 'crypto';
+import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
+import * as path from 'path';
+ import sharp from 'sharp';
+ import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
+// import { getSignedUrl } from '@aws-sdk/s3-request-presigner'; // optional for private files
+
+@Injectable()
+export class StorageService {
+  private readonly logger = new Logger(StorageService.name);
+  private readonly disk: 'local' | 's3';
+  private readonly localRoot: string;
+  private readonly s3Client?: S3Client;
+  private readonly bucket?: string;
+  private readonly publicBaseUrl?: string;
+
+  constructor(private config: ConfigService) {
+    this.disk = this.config.get('STORAGE_DISK', 'local') as 'local' | 's3';
+
+    // Determine monorepo root: if we're in apps/api, go up 2 levels; otherwise use cwd
+    const cwd = process.cwd();
+    const isInAppsApi = cwd.includes(path.join('apps', 'api')) || cwd.endsWith('apps\\api');
+    this.localRoot = isInAppsApi 
+      ? path.join(cwd, '..', '..', 'uploads') // Go up to monorepo root
+      : path.join(cwd, 'uploads'); // Use current directory
+    
+    this.logger.log(`Storage initialized - Disk: ${this.disk}, Root: ${this.localRoot}, CWD: ${cwd}`);
+
+    if (this.disk === 's3') {
+      this.bucket = this.config.getOrThrow('STORAGE_BUCKET');
+      this.publicBaseUrl = this.config.get('STORAGE_PUBLIC_URL'); // e.g. https://img.yourdomain.com
+
+      this.s3Client = new S3Client({
+        region: this.config.get('STORAGE_REGION', 'auto'), // 'auto' for R2
+        endpoint: this.config.get('STORAGE_ENDPOINT'),     // required for R2 / MinIO
+        credentials: {
+          accessKeyId: this.config.getOrThrow('STORAGE_KEY'),
+          secretAccessKey: this.config.getOrThrow('STORAGE_SECRET'),
+        },
+        forcePathStyle: true, // important for R2 / MinIO
+      });
+    }
+
+    // Ensure local dir exists (dev only)
+    if (this.disk === 'local') {
+      fs.mkdir(this.localRoot, { recursive: true })
+        .then(() => this.logger.log(`Uploads directory created/verified: ${this.localRoot}`))
+        .catch((err) => this.logger.error(`Failed to create uploads directory: ${err.message}`));
+    }
+  }
+
+  async upload(
+    file: Express.Multer.File,
+    folder: string = 'properties', // e.g. 'properties/2026/01'
+  ): Promise<string> {
+    if (!file || !file.buffer) {
+      throw new Error('Invalid file: file or file.buffer is missing');
+    }
+
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    if (file.size > MAX_FILE_SIZE) {
+      throw new Error(`File too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB`);
+    }
+
+    const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
+    if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+      throw new Error(`Invalid file type. Allowed types: ${ALLOWED_MIME_TYPES.join(', ')}`);
+    }
+
+    const ext = path.extname(file.originalname).toLowerCase() || '.webp';
+    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif'];
+    if (ext !== '.webp' && !allowedExtensions.includes(ext)) {
+      throw new Error(`Invalid file extension. Allowed: ${allowedExtensions.join(', ')}`);
+    }
+
+    const key = `${folder}/${randomUUID()}${ext}`;
+
+    if (this.disk === 'local') {
+      const fullPath = path.join(this.localRoot, key);
+      const dirPath = path.dirname(fullPath);
+      
+      this.logger.log(`Uploading to: ${fullPath}`);
+      await fs.mkdir(dirPath, { recursive: true });
+      await fs.writeFile(fullPath, file.buffer);
+      this.logger.log(`File saved successfully: ${fullPath}`);
+      return key;
+    }
+
+    // S3 / R2 upload
+    await this.s3Client!.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        CacheControl: 'public, max-age=31536000, immutable',
+      }),
+    );
+
+    return key;
+  }
+
+  /**
+   * Write a buffer at a key the caller chose.
+   *
+   * `upload()` names files itself with a random UUID, which is right for a
+   * raw passthrough but wrong for the media library — that needs readable,
+   * SEO-friendly names like `5-marla-house-dha-phase-6-a1b2c3d4.webp`, and it
+   * writes two objects (image + thumbnail) per upload. Additive: nothing that
+   * calls `upload()` changes.
+   */
+  async putBuffer(
+    key: string,
+    body: Buffer,
+    contentType = 'image/webp',
+  ): Promise<string> {
+    if (this.disk === 'local') {
+      const fullPath = path.join(this.localRoot, key);
+      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await fs.writeFile(fullPath, body);
+      return key;
+    }
+
+    await this.s3Client!.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        CacheControl: 'public, max-age=31536000, immutable',
+      }),
+    );
+
+    return key;
+  }
+
+  /** Read a stored object back. Null when it is missing. */
+  async readBuffer(key: string): Promise<Buffer | null> {
+    try {
+      if (this.disk === 'local') {
+        return await fs.readFile(path.join(this.localRoot, key));
+      }
+
+      const response = await this.s3Client!.send(
+        new GetObjectCommand({ Bucket: this.bucket!, Key: key }),
+      );
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+        chunks.push(chunk);
+      }
+      return Buffer.concat(chunks);
+    } catch (error) {
+      this.logger.warn(`Could not read "${key}": ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  getUrl(key: string): string {
+    if (this.disk === 'local') {
+      return `/uploads/${key}`; // Nest will serve it
+    }
+
+    if (this.publicBaseUrl) {
+      return `${this.publicBaseUrl}/${key}`;
+    }
+
+    // fallback: construct R2 public URL if no custom domain
+    const endpoint = this.config.get('STORAGE_ENDPOINT')!;
+    const match = endpoint.match(/https:\/\/([^.]+)\.r2\.cloudflarestorage\.com/);
+    if (match) {
+      return `https://${this.bucket}.${match[1]}.r2.dev/${key}`;
+    }
+
+    return `https://${this.bucket}.s3.${this.config.get('STORAGE_REGION')}.amazonaws.com/${key}`;
+  }
+
+  // List all files in a folder (for local storage)
+  async listFiles(folder: string = ''): Promise<Array<{ key: string; url: string; size?: number; modified?: Date }>> {
+    if (this.disk === 'local') {
+      const folderPath = folder ? path.join(this.localRoot, folder) : this.localRoot;
+      const storageService = this; // Capture this for use in nested function
+      
+      try {
+        const files: Array<{ key: string; url: string; size?: number; modified?: Date }> = [];
+        
+        async function scanDirectory(dir: string, baseFolder: string = ''): Promise<void> {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            const relativePath = baseFolder ? path.join(baseFolder, entry.name) : entry.name;
+            
+            if (entry.isDirectory()) {
+              // .thumbs holds resized copies made by /img — not files anyone uploaded.
+              if (entry.name.startsWith('.')) continue;
+              await scanDirectory(fullPath, relativePath);
+            } else if (entry.isFile()) {
+              const stats = await fs.stat(fullPath);
+              const key = relativePath.replace(/\\/g, '/'); // Normalize path separators
+              files.push({
+                key,
+                url: storageService.getUrl(key),
+                size: stats.size,
+                modified: stats.mtime,
+              });
+            }
+          }
+        }
+        
+        await scanDirectory(folderPath, folder);
+        return files.sort((a, b) => (b.modified?.getTime() || 0) - (a.modified?.getTime() || 0)); // Sort by newest first
+      } catch (error) {
+        this.logger.error(`Error listing files: ${error}`);
+        return [];
+      }
+    }
+    
+    // For S3, you would need to implement ListObjectsV2Command
+    // This is a placeholder for S3 implementation
+    return [];
+  }
+
+  // Delete a file
+  async deleteFile(key: string): Promise<boolean> {
+    if (this.disk === 'local') {
+      const fullPath = path.join(this.localRoot, key);
+      try {
+        await fs.unlink(fullPath);
+        this.logger.log(`File deleted: ${fullPath}`);
+        return true;
+      } catch (error) {
+        this.logger.error(`Error deleting file: ${error}`);
+        return false;
+      }
+    }
+    
+    // For S3, implement DeleteObjectCommand
+    // This is a placeholder
+    return false;
+  }
+
+  // ── NEW: Generate a 300×300 JPEG thumbnail on the fly ──────────────────────
+  async getThumbnail(key: string): Promise<Buffer | null> {
+    try {
+      if (this.disk === 's3') {
+        const command = new GetObjectCommand({ Bucket: this.bucket!, Key: key });
+        const response = await this.s3Client!.send(command);
+
+        // Stream ko Buffer mein convert karo
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+          chunks.push(chunk);
+        }
+        const imageBuffer = Buffer.concat(chunks);
+
+        return await sharp(imageBuffer)
+          .resize(300, 300, { fit: 'cover', position: 'center' })
+          .jpeg({ quality: 75, progressive: true })
+          .toBuffer();
+      }
+
+      // Local storage ke liye
+      const filePath = path.join(this.localRoot, key);
+      if (!fsSync.existsSync(filePath)) {
+        this.logger.warn(`Thumbnail: file not found at ${filePath}`);
+        return null;
+      }
+
+      return await sharp(filePath)
+        .resize(300, 300, { fit: 'cover', position: 'center' })
+        .jpeg({ quality: 75, progressive: true })
+        .toBuffer();
+    } catch (error) {
+      this.logger.error(`Thumbnail generation failed for key "${key}": ${error}`);
+      return null;
+    }
+  }
+
+  // ── NEW: Paginated file listing with optional search ───────────────────────
+  async listFilesPaginated(
+    folder: string,
+    page = 1,
+    limit = 50,
+    search = '',
+  ): Promise<{ images: any[]; total: number; totalPages: number }> {
+    const allFiles = await this.listFiles(folder);
+
+    // Search filter: key ke andar search string dhundo (case-insensitive)
+    const filtered = search
+      ? allFiles.filter((f) => f.key.toLowerCase().includes(search.toLowerCase()))
+      : allFiles;
+
+    const total = filtered.length;
+    const start = (page - 1) * limit;
+
+    const images = filtered
+      .slice(start, start + limit)
+      .map((f) => ({
+        ...f,
+        // Controller ka thumbnail endpoint use karo
+        thumbnailUrl: `/properties/images/thumbnail/${encodeURIComponent(f.key)}`,
+      }));
+
+    return { images, total, totalPages: Math.ceil(total / limit) };
+  }
+
+  // Optional: stream / download method if needed
+  // async getStream(key: string) { ... }
+}
+
+export default StorageService;

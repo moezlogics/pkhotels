@@ -1,0 +1,134 @@
+import { Prop, Schema, SchemaFactory } from "@nestjs/mongoose";
+import { Document, Types } from "mongoose";
+import * as bcrypt from "bcrypt";
+
+export interface UserDocument extends User, Document {
+  comparePassword(candidatePassword: string): Promise<boolean>;
+}
+
+@Schema({ timestamps: true })
+export class User {
+  @Prop({ required: true, unique: true, lowercase: true, trim: true })
+  email: string;
+
+  /**
+   * Not required: an account created through "Continue with Google" never has
+   * one. The pre-save hook below skips hashing when it is absent, and
+   * comparePassword returns false, so a Google-only account cannot be signed
+   * into with a guessed password.
+   */
+  @Prop({ select: false })
+  password?: string;
+
+  /** Set when the account was created or linked through Google sign-in. */
+  @Prop({ index: true, sparse: true })
+  googleId?: string;
+
+  /** How this account signs in. Useful when telling someone why their password does not work. */
+  @Prop({ enum: ["credentials", "google"], default: "credentials" })
+  provider?: string;
+
+  @Prop({ enum: ["USER", "AGENT", "ADMIN"], default: "USER" })
+  role: string;
+
+  @Prop({ select: false })
+  refreshToken?: string; // hashed version - for secure refresh
+
+  // Optional fields
+  @Prop()
+  name?: string;
+
+  @Prop()
+  phone?: string;
+
+  @Prop()
+  whatsappNumber?: string;
+
+  @Prop()
+  avatarUrl?: string;
+
+  @Prop()
+  bio?: string;
+
+  @Prop()
+  companyName?: string;
+
+  @Prop()
+  experienceYears?: number;
+
+  @Prop()
+  address?: string;
+
+  /**
+   * The city an agent or agency works in — they are shown on that city's
+   * pages (verified agencies, "agents in Lahore"). Older accounts without
+   * one are placed by where most of their listings are.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'City', index: true, default: undefined })
+  city?: Types.ObjectId;
+
+  @Prop({ default: true })
+  isActive: boolean;
+
+  /* ── Agency & profile ── */
+
+  /**
+   * Set on an agent account created by an agency owner (Agency Plus): the
+   * owner's user id. The agent lists under the owner's plan and sees only
+   * their own listings; the owner sees and manages the whole team's.
+   */
+  @Prop({ type: Types.ObjectId, ref: 'User', index: true, default: undefined })
+  agencyId?: Types.ObjectId;
+
+  /**
+   * An agency's agent only: how many live listings the owner lets this agent
+   * have out of the team's allowance. Empty or 0 — no cap of their own; the
+   * team's plan limit still applies.
+   */
+  @Prop({ type: Number, default: undefined })
+  listingLimit?: number;
+
+  /** Profile links — shown when the plan includes social links. */
+  @Prop({ type: Object, default: undefined })
+  socialLinks?: { facebook?: string; instagram?: string; youtube?: string; tiktok?: string; linkedin?: string; website?: string };
+
+  /** Profile cover image — shown when the plan includes a branded profile. */
+  @Prop()
+  coverUrl?: string;
+
+  // 🔒 SECURITY: Account lockout mechanism (HIGH PRIORITY)
+  @Prop({ default: 0, select: false })
+  loginAttempts: number;
+
+  @Prop({ select: false })
+  lockUntil?: Date;
+
+  /** Push notification groups this person switched off (Dashboard → Notifications). */
+  @Prop({ type: [String], default: undefined })
+  pushOff?: string[];
+
+  /** Push daily limit: the day (YYYY-MM-DD, Pakistan time) and how many were sent on it. */
+  @Prop({ default: undefined })
+  pushDay?: string;
+
+  @Prop({ default: undefined })
+  pushDayCount?: number;
+
+  // Add profile picture, agencyId, etc. later
+}
+
+export const UserSchema = SchemaFactory.createForClass(User);
+
+UserSchema.pre("save", async function (next) {
+  // Google accounts have no password to hash.
+  if (!this.password || !this.isModified("password")) return;
+  this.password = await bcrypt.hash(this.password, 10);
+});
+
+UserSchema.methods.comparePassword = async function (
+  candidatePassword: string,
+) {
+  // A Google-only account has no password — never let a comparison succeed.
+  if (!this.password) return false;
+  return bcrypt.compare(candidatePassword, this.password);
+};

@@ -1,0 +1,653 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-navy: var(--brand-navy);
+  --color-navy-foreground: var(--brand-navy-foreground);
+  --color-price-tag: var(--price-tag);
+  --color-gold: var(--gold);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
+  --color-surface: var(--surface);
+  --color-ink: var(--ink);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--site-font, var(--font-geist-sans)), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+}
+
+/*
+ * The public site's look, in one place.
+ *
+ * It ran on shadcn's untouched defaults: a near-black "primary", a 10px base
+ * radius that every rounded-2xl/3xl then inflated further, and pure greys —
+ * which is a large part of why it read as a template rather than a product.
+ *
+ * PakHotels' palette: a deep teal primary (trust, calm — "home")
+ * with a near-black teal for the footer and a warm orange for rent tags, so
+ * it reads as its own product. Ink is slate-900, borders slate-200, muted
+ * text slate-500. The base radius is 10px for a softer, friendlier feel.
+ */
+:root {
+  --radius: 0.75rem;
+  /* The dark brand shade follows the primary colour unless the admin sets
+     one (Settings → Appearance → Dark colour). */
+  --brand-navy: #1c1033;
+  --brand-navy-foreground: #ffffff;
+  /* The price strip on listing photos (Settings → Appearance). */
+  --price-tag: #1c1033;
+  /* Marigold: ratings, deals, the one warm note against lapis. */
+  /* Star icons: a violet shade, so the site stays in purple. */
+  --gold: #8b5cf6;
+  /* Lilac: the soft accent — ratings, highlights, badges, the active tab (plum text on it). */
+  --highlight: #d9c6ff;
+  --highlight-foreground: #1c1033;
+  /* App background behind white sheets and cards. */
+  --surface: #f0ebfb;
+  /* Deep plum: text, dark sections, the floating nav. */
+  --ink: #1c1033;
+  --card: #ffffff;
+  --card-foreground: #1c1033;
+  --popover: #ffffff;
+  --popover-foreground: #1c1033;
+  /* Violet: every primary action. Always white text on it. */
+  --primary: #6d28d9;
+  --primary-foreground: #ffffff;
+  --secondary: #f0ebfb;
+  --secondary-foreground: #1c1033;
+  --muted: #f0ebfb;
+  --muted-foreground: #6b6480;
+  --accent: #efe8ff;
+  --accent-foreground: #3b1a86;
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: #e7e1f3;
+  --input: #d8cfec;
+  --ring: #6d28d9;
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  /* Dashboard sidebar: the deep brand teal, light text, a mint active row. */
+  --sidebar: var(--brand-navy);
+  --sidebar-foreground: color-mix(in srgb, white 86%, var(--brand-navy));
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: color-mix(in srgb, white 12%, var(--brand-navy));
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: color-mix(in srgb, white 16%, var(--brand-navy));
+  --sidebar-ring: var(--primary);
+  --background: #ffffff;
+  --foreground: #1c1033;
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground overflow-x-hidden font-sans;
+  }
+}
+
+/* Hide Clerk development mode badge */
+.cl-internal-1w8t6xl {
+  display: none !important;
+}
+
+/* Hide only Clerk footer text (Secured by Clerk & Development mode) */
+.cl-footer,
+.cl-footerAction,
+.cl-internal-b3fm6y,
+.cl-footerActionLink,
+.cl-footerActionText {
+  display: none !important;
+}
+
+/* More specific selectors */
+[class*="cl-footer"] {
+  display: none !important;
+}
+
+/* Hide links in modal footer */
+.cl-modalContent footer,
+.cl-card footer {
+  display: none !important;
+}
+
+/* Force hide Clerk footer - MOST IMPORTANT */
+.cl-footer,
+.cl-footerAction,
+.cl-footerActionLink,
+.cl-footerActionText,
+.cl-internal-b3fm6y,
+div[class*="cl-footer"],
+a[class*="footerAction"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+.property-card {
+  @apply bg-card border border-border rounded-lg overflow-hidden shadow-sm hover:shadow-lg transition-all duration-300;
+}
+
+.filter-tab {
+  @apply px-4 py-2 rounded-lg font-medium transition-colors border border-border;
+}
+
+.filter-tab.active {
+  @apply bg-primary text-primary-foreground border-primary;
+}
+
+/* Rich Text Styling */
+.prose {
+  color: var(--foreground);
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  @apply font-bold mt-6 mb-4 text-foreground;
+}
+
+.prose h1 {
+  @apply text-3xl;
+}
+
+.prose h2 {
+  @apply text-2xl;
+}
+
+.prose h3 {
+  @apply text-xl;
+}
+
+.prose p {
+  @apply mb-4 leading-relaxed;
+}
+
+.prose ul {
+  @apply list-disc pl-6 mb-4;
+}
+
+.prose ol {
+  @apply list-decimal pl-6 mb-4;
+}
+
+.prose li {
+  @apply mb-1;
+}
+
+.prose a {
+  @apply text-primary underline;
+}
+
+.prose img {
+  @apply rounded-lg my-6 max-w-full h-auto;
+}
+
+.prose blockquote {
+  @apply border-l-4 border-primary/20 pl-4 italic my-4;
+}
+
+.prose strong {
+  @apply font-bold text-foreground;
+}
+
+/*
+ * Rich text base styles.
+ *
+ * The `prose` class is used across the public site and the dashboard previews,
+ * but @tailwindcss/typography is not installed — only the table rules below
+ * existed, so editor HTML rendered with unstyled headings, lists and links.
+ * These rules cover the tags the rich-text editor actually emits.
+ */
+.prose {
+  @apply text-foreground;
+}
+
+.prose > * + * {
+  @apply mt-4;
+}
+
+.prose h1 {
+  @apply mt-8 mb-3 text-2xl font-semibold tracking-tight;
+}
+
+.prose h2 {
+  @apply mt-8 mb-3 text-xl font-semibold tracking-tight;
+}
+
+.prose h3 {
+  @apply mt-6 mb-2 text-lg font-semibold;
+}
+
+.prose h4,
+.prose h5,
+.prose h6 {
+  @apply mt-5 mb-2 font-semibold;
+}
+
+.prose p {
+  @apply leading-relaxed;
+}
+
+.prose a {
+  @apply text-primary underline underline-offset-2 hover:no-underline;
+}
+
+.prose strong {
+  @apply font-semibold text-foreground;
+}
+
+.prose ul {
+  @apply my-4 list-disc space-y-1.5 pl-6;
+}
+
+.prose ol {
+  @apply my-4 list-decimal space-y-1.5 pl-6;
+}
+
+.prose li > ul,
+.prose li > ol {
+  @apply my-1.5;
+}
+
+.prose blockquote {
+  @apply my-5 border-l-2 border-border pl-4 italic text-muted-foreground;
+}
+
+.prose code {
+  @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em];
+}
+
+.prose pre {
+  @apply my-5 overflow-x-auto rounded-lg bg-muted p-4;
+}
+
+.prose pre code {
+  @apply bg-transparent p-0;
+}
+
+.prose img {
+  @apply my-5 rounded-lg;
+}
+
+.prose hr {
+  @apply my-8 border-border;
+}
+
+.prose figcaption {
+  @apply mt-2 text-sm text-muted-foreground;
+}
+
+/* Smaller variant used in the dashboard preview dialogs. */
+.prose-sm {
+  @apply text-sm;
+}
+
+.prose-sm h1 {
+  @apply text-xl;
+}
+
+.prose-sm h2 {
+  @apply text-lg;
+}
+
+.prose-sm h3 {
+  @apply text-base;
+}
+
+/* Rich Text Tables */
+.prose table {
+  @apply w-full text-left border-collapse my-6 border-2 border-border;
+}
+
+.prose th {
+  @apply border-2 border-border px-4 py-2 font-bold bg-muted/30;
+}
+
+.prose td {
+  @apply border border-border px-4 py-2;
+}
+
+.prose tr:nth-child(even) {
+  @apply bg-muted/10;
+}
+
+@utility scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+/*
+ * A scroll container that scrolls without showing a bar — the gallery track
+ * and the thumbnail strips. The bar is redundant there: the slide counter and
+ * the thumbnails already say where you are, and on a desktop a visible bar
+ * under the photo looks like a defect.
+ */
+.hide-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * App-like spacing: the public site's content sits 12px from the screen edge
+ * on phones (16px above). Every `.container` inside the site shell follows
+ * --gutter; rows that bleed to the edge (scrolling chips, carousels) use
+ * -mx-[var(--gutter)] px-[var(--gutter)]. Header and footer opt out with
+ * `.container-flush` and keep their own padding.
+ */
+:root {
+  --gutter: 16px;
+  /* The soft neutral the public site sits on; cards are white on top. */
+  --app-bg: #f7f5fc;
+}
+@media (min-width: 640px) {
+  :root {
+    --gutter: 1rem;
+  }
+}
+@media (max-width: 639.98px) {
+  .site-shell .container:not(.container-flush) {
+    padding-left: var(--gutter) !important;
+    padding-right: var(--gutter) !important;
+  }
+}
+
+/*
+ * Readable text on the public site: the grey shades used for secondary text
+ * are shifted a step darker inside the site shell, so captions, locations and
+ * labels read near-black instead of washed-out grey. Borders and backgrounds
+ * (the 50–300 shades) are untouched.
+ */
+.site-shell {
+  background: var(--app-bg);
+  min-height: 100dvh;
+  --color-slate-400: #64748b;
+  --color-slate-500: #3f4a5a;
+  --color-slate-600: #2b3443;
+  --color-slate-700: #1f2836;
+  --color-slate-800: #151c28;
+  --color-gray-400: #6b7280;
+  --color-gray-500: #404752;
+  --color-gray-600: #2c323b;
+  --color-gray-700: #1f242b;
+  --muted-foreground: #3f4a5a;
+}
+
+/* Buttons that follow Settings → Appearance → Button shape. */
+:root {
+  --btn-radius: 999px;
+  --tabbar-radius: 22px;
+}
+.btn-shape {
+  border-radius: var(--btn-radius) !important;
+}
+
+/*
+ * Leaflet gives its panes z-index 400–1000. Without a stacking context of
+ * their own, every map on the site (listing location, map picker)
+ * painted over the sticky header, tab bars and the phone contact bar.
+ */
+.leaflet-container {
+  isolation: isolate;
+  z-index: 0;
+}
+
+/* ── Site assistant (components/assistant/AssistantWidget.tsx) ── */
+@keyframes assistant-open { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes assistant-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes assistant-pop { 0% { opacity: 0; transform: translateY(8px) scale(0.95); } 100% { opacity: 1; transform: none; } }
+@keyframes assistant-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.assistant-open { animation: assistant-open 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); transform-origin: bottom right; }
+.assistant-fade { animation: assistant-fade 0.25s ease-out; }
+.assistant-pop { animation: assistant-pop 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.assistant-shimmer {
+  background: linear-gradient(90deg, #64748b 0%, #64748b 40%, #cbd5e1 50%, #64748b 60%, #64748b 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: assistant-shimmer 1.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-open, .assistant-fade, .assistant-pop, .assistant-shimmer { animation: none; }
+  .assistant-shimmer { color: #64748b; }
+}
+
+/* Muted text inside the dark dashboard sidebar. */
+[data-sidebar="sidebar"] {
+  --muted-foreground: color-mix(in srgb, white 60%, var(--brand-navy));
+}
+
+
+/* ── PakHotels app shell ── */
+.tabular { font-variant-numeric: tabular-nums; }
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+/* Mughal jali (lattice) — used once, behind the home search. */
+.jali {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56' viewBox='0 0 56 56'%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='0.09' stroke-width='1.2'%3E%3Cpath d='M28 4 L52 28 L28 52 L4 28 Z'/%3E%3Ccircle cx='28' cy='28' r='9'/%3E%3Cpath d='M28 19 V4 M28 37 V52 M19 28 H4 M37 28 H52'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 56px 56px;
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+
+
+/* ── PakHotels design system: purple shades only ──
+ * Violet #6d28d9 for every action (white text on it), lilac #d9c6ff as the
+ * accent (ratings, highlights, active tab — always with plum text),
+ * deep plum #1c1033 for text and dark sections, and a lavender-white page
+ * with white cards. Headings are Bricolage Grotesque, set tight; body copy
+ * stays Manrope. */
+.site-shell h1, .site-shell h2, .font-display {
+  font-family: var(--font-display), var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.025em;
+}
+.site-shell h1 { font-weight: 700; }
+.site-shell h2 { font-weight: 700; }
+
+/* "• EXPLORE" — the small label above a section heading. */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+.eyebrow::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--highlight);
+  box-shadow: 0 0 0 2px var(--primary);
+}
+.eyebrow-light { color: #fff; }
+.eyebrow { color: var(--primary); }
+.eyebrow-light { color: #fff; }
+.eyebrow-light::before { box-shadow: none; }
+
+/* A highlighter stroke behind a word — lilac behind plum text. */
+.mark {
+  background: linear-gradient(transparent 56%, var(--highlight) 56%, var(--highlight) 92%, transparent 92%);
+  padding: 0 0.06em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+/* On plum: a solid lilac pill with plum text. */
+.mark-pill {
+  display: inline-block;
+  background: var(--highlight);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 0 0.32em 0.04em;
+  line-height: 1.1;
+}
+
+.card-soft {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+}
+
+/* Pill buttons. */
+.btn-yellow, .btn-ink, .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 22px;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition: transform 0.15s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.btn-yellow:active, .btn-ink:active, .btn-ghost:active { transform: scale(0.97); }
+/* .btn-yellow is the primary action (the name stayed when the colour changed). */
+.btn-yellow { background: var(--primary); color: #fff; box-shadow: 0 12px 28px -12px rgb(109 40 217 / 0.75); }
+.btn-yellow:hover { background: #5b21b6; }
+.btn-ink { background: var(--ink); color: #fff; }
+.btn-ink:hover { background: #2d1b52; }
+.btn-ghost { background: #fff; color: var(--ink); border: 1px solid var(--border); }
+.btn-ghost:hover { border-color: var(--primary); color: var(--primary); }
+.btn-yellow:focus-visible, .btn-ink:focus-visible, .btn-ghost:focus-visible { outline: 3px solid rgb(109 40 217 / 0.35); outline-offset: 2px; }
+.btn-sm { height: 40px; padding: 0 16px; font-size: 15px; }
+
+/* Film grain and a violet glow on the dark sections, so plum never looks flat. */
+.grain {
+  position: relative;
+  isolation: isolate;
+  background-image:
+    radial-gradient(55% 70% at 100% 0%, rgb(139 92 246 / 0.45), transparent 70%),
+    radial-gradient(45% 60% at 0% 100%, rgb(109 40 217 / 0.35), transparent 70%);
+}
+.grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.08;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Dotted line joining a row of round items (home cities). */
+.dot-rail { position: relative; }
+.dot-rail::before {
+  content: "";
+  position: absolute;
+  left: 40px;
+  right: 40px;
+  top: var(--rail-y, 42px);
+  border-top: 2px dotted rgb(109 40 217 / 0.3);
+  z-index: 0;
+}
+@media (min-width: 768px) { .dot-rail::before { --rail-y: 58px; } }
+
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.rise { animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+/* Dashboard: the same warm, rounded look as the site. Older screens use
+   slate borders and rounded-2xl boxes; these nudge them into line. */
+.dash-shell .rounded-2xl { border-radius: 22px; }
+.dash-shell .border-slate-200, .dash-shell .border-slate-200\/80 { border-color: var(--border); }
+.dash-shell h2 { font-family: var(--font-display), var(--font-geist-sans), sans-serif; letter-spacing: -0.02em; }
+
+/* Date picker: weeks that are entirely in the past take space and teach nothing. */
+.dp-compact .rdp-week:not(:has(td:not([data-disabled="true"]))) { display: none; }
+
+/* Selection and the browser's own accents follow the brand. */
+::selection { background: rgb(109 40 217 / 0.18); }
+:root { accent-color: #6d28d9; }

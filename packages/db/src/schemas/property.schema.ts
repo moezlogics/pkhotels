@@ -1,0 +1,289 @@
+import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose'
+import { Document, Types } from 'mongoose'
+import { Area } from './area.schema'
+// import { City } from './city.schema'
+
+@Schema({ timestamps: true })
+export class Property extends Document {
+  /** PakHotels lists rentals only. */
+  @Prop({ required: true, enum: ['rent'], default: 'rent', index: true })
+  listingType: 'rent'
+
+  @Prop({ required: true, enum: ['house', 'upper-portion', 'lower-portion', 'flat', 'apartment', 'room', 'hostel', 'shop', 'office', 'warehouse', 'commercial'], index: true })
+  propertyType: 'house' | 'upper-portion' | 'lower-portion' | 'flat' | 'apartment' | 'room' | 'hostel' | 'shop' | 'office' | 'warehouse' | 'commercial'
+
+  // @Prop({ required: true })
+  // city: string
+
+  @Prop({ required: true, unique: true, index: true })
+  slug: string
+
+  @Prop({ required: true })
+  title: string
+
+  @Prop({ required: true })
+  location: string
+
+  @Prop({ required: true })
+  bedrooms: number
+
+  @Prop({ required: true })
+  bathrooms: number
+
+  @Prop({ required: true })
+  areaSize: number // sq ft - property size
+
+  @Prop({ required: true })
+  price: number // PKR
+
+  @Prop({ type: Number, default: 0 })
+  marla?: number
+
+  @Prop({ type: Number, default: 0 })
+  kanal?: number
+
+  /** Square feet in the marla this listing was sized in (its city's). Unset = 225. */
+  @Prop({ type: Number })
+  marlaSqft?: number
+
+  @Prop({ required: true })
+  description: string
+
+  @Prop({ required: true })
+  contactNumber: string
+
+  @Prop({ type: String })
+  whatsappNumber?: string
+
+  @Prop({ type: [String], default: [] })
+  features: string[]
+  
+  // Relations 
+  @Prop({ type: Types.ObjectId, ref: 'Area', required: false, index: true })
+  area?: Types.ObjectId | Area | null;
+
+  // @Prop({ type: Types.ObjectId, ref: 'City', required: true, index: true, default: null })
+  // city: Types.ObjectId | City | null;
+
+  @Prop({ type: String }) // Cloudinary/S3 URL
+  mainPhotoUrl?: string
+
+  @Prop({ type: [String], default: [] })
+  additionalPhotosUrls: string[]
+
+  /**
+   * One short walkthrough clip, shown as the last slide of the gallery.
+   *
+   * A URL, not an upload: the video goes into the media library first (which
+   * enforces the size and length limits), and the listing stores the link.
+   */
+  @Prop({ type: String })
+  videoUrl?: string
+
+  /** Poster frame for the video, so the gallery has a tile before it plays. */
+  @Prop({ type: String })
+  videoPosterUrl?: string
+
+  /*
+   * What the listing brain thought (listing-brain.service.ts).
+   *
+   * Stored rather than recomputed so the admin can see WHY a listing is in the
+   * queue, and so a pattern across one agent is visible later. Listings created
+   * before the brain existed simply have 0 and an empty list.
+   */
+  @Prop({ type: Number, default: 0, index: true })
+  moderationScore?: number
+
+  @Prop({ type: [String], default: [] })
+  moderationReasons?: string[]
+
+  /** "rules" or "rules+ai" — which pass produced the score. */
+  @Prop({ type: String })
+  moderationSource?: string
+
+  /** True when the brain published it without a human looking. */
+  @Prop({ type: Boolean, default: false })
+  autoPublished?: boolean
+
+  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  owner: Types.ObjectId
+
+  @Prop({ type: Types.ObjectId, ref: 'Subscription', required: false })
+  subscriptionId?: Types.ObjectId
+
+  /**
+   * Pinned to the top of the public lists by an admin.
+   *
+   * The field has existed since the beginning and nothing ever read or wrote
+   * it: no endpoint set it, no query sorted on it, and the packages page
+   * advertised "featured listings" that could not be granted. It is wired up
+   * now, and deliberately an admin decision alone — a plan is not a
+   * prerequisite, so a listing worth showing can be shown.
+   */
+  @Prop({ default: false, index: true })
+  isFeatured: boolean
+
+  /** When it was featured, so the newest promotion leads. */
+  @Prop({ type: Date })
+  featuredAt?: Date
+
+  /**
+   * Who pinned it: 'owner' (out of their plan's featured slots — taken back
+   * when the plan no longer has them) or 'admin' (editorial, never taken
+   * back automatically). Empty on listings featured before this was kept.
+   */
+  @Prop({ type: String, default: undefined })
+  featuredBy?: 'owner' | 'admin'
+
+  /**
+   * 'expired': a listing on the Free plan whose month ran out (see expiresAt).
+   * It leaves search, the city and area pages, the map and the sitemap, and
+   * no longer counts against the plan; its own page keeps answering with an
+   * "expired" notice, because the URL may be ranked. Renewing puts it back.
+   */
+  @Prop({ default: 'pending', index: true, enum: ['pending', 'approved', 'rejected', 'draft', 'expired'] })
+  status: 'pending' | 'approved' | 'rejected' | 'draft' | 'expired'
+
+  /**
+   * When a Free-plan listing stops being live — 30 days after it went up or
+   * was last renewed. Empty on a paid plan's listings (they stay live while
+   * the plan does) and on the admin's own listings.
+   */
+  @Prop({ type: Date, default: undefined })
+  expiresAt?: Date
+
+  /**
+   * Has it gone? Separate from `status`, which is moderation.
+   *
+   * A rented house is not a rejected listing: it was fine, it is simply off the
+   * market. Keeping the two apart means an agent can mark their own listing
+   * rented without touching the approval state, and the approval queue does not
+   * fill up with houses that were never in question.
+   *
+   * Rows written before this field existed have neither value, which reads as
+   * 'available' everywhere — nothing already on the site changes.
+   */
+  @Prop({ enum: ['available', 'rented'], default: 'available', index: true })
+  availability?: 'available' | 'rented'
+
+  /**
+   * When it was marked rented — the clock for the 15-day grace period.
+   *
+   * For those fifteen days the listing stays on the site wearing a "Rented"
+   * "Rented" badge with the phone number hidden: it is social proof, and a
+   * tenant who saw it yesterday is not left staring at a 404. After that it
+   * drops out of search, the city and area pages and the agent's profile,
+   * while the URL itself keeps answering — the page is ranked, and deleting
+   * or redirecting it would throw that away.
+   *
+   * Computed at query time rather than flipped by a cron job, so marking a
+   * listing available again brings it straight back with no second job to run.
+   */
+  @Prop({ type: Date })
+  availabilityChangedAt?: Date
+
+  // Optional source tag (e.g. 'manual', 'api', 'n8n') so admin can see automated vs manual drafts
+  @Prop({ type: String, default: 'manual' })
+  source?: string
+
+  /**
+   * The listing's id in the system it came from (Listing API / automation):
+   * sending the same one again finds this listing instead of adding a copy.
+   */
+  @Prop({ type: String, default: undefined })
+  externalId?: string
+
+  /** Direct URL to the original listing on the source portal (admin-only). */
+  @Prop({ type: String, default: undefined })
+  sourceUrl?: string
+
+  /** Real owner / seller name from the source listing (admin-only). */
+  @Prop({ type: String, default: undefined })
+  sourceOwnerName?: string
+
+  /** Real owner / seller phone number from the source listing (admin-only). */
+  @Prop({ type: String, default: undefined })
+  sourceOwnerPhone?: string
+
+  /** Real owner / seller WhatsApp number from the source listing (admin-only). */
+  @Prop({ type: String, default: undefined })
+  sourceOwnerWhatsapp?: string
+
+  /** Real owner / seller profile URL on the source portal (admin-only). */
+  @Prop({ type: String, default: undefined })
+  sourceOwnerProfileUrl?: string
+
+  @Prop({ type: Number })
+  latitude?: number
+
+  @Prop({ type: Number })
+  longitude?: number
+
+  /*
+   * Listing performance counters.
+   *
+   * Written by PropertyCountersService, which buffers events in memory and
+   * flushes them as one bulk $inc every few seconds — a busy listing would
+   * otherwise be a write hot-spot. Existing documents simply have no field
+   * yet; everything that reads them treats a missing value as 0.
+   */
+
+  /** Detail-page opens. Once per visitor per session. */
+  @Prop({ type: Number, default: 0 })
+  views?: number
+
+  /** Times the listing's card was actually scrolled into view in a feed. */
+  @Prop({ type: Number, default: 0 })
+  impressions?: number
+
+  /** Taps on "Call". The number that tells an agent a listing is working. */
+  @Prop({ type: Number, default: 0 })
+  phoneClicks?: number
+
+  /** Taps on "WhatsApp". */
+  @Prop({ type: Number, default: 0 })
+  whatsappClicks?: number
+}
+
+export const PropertySchema = SchemaFactory.createForClass(Property)
+
+// Search Optimization: Text index for title and location
+PropertySchema.index({ title: 'text', location: 'text' });
+
+// Compound index for common listing queries
+PropertySchema.index({ status: 1, listingType: 1, propertyType: 1 });
+PropertySchema.index({ source: 1, externalId: 1 }, { sparse: true });
+
+/*
+ * 🚀 PERF: indexes for the dashboard list query.
+ *
+ * The admin list is `find({ status? }).sort({ createdAt: -1 })` and an agent's
+ * list is `find({ owner }).sort({ createdAt: -1 })`. `owner` had no index at
+ * all and `createdAt` was never indexed, so both did a full collection scan
+ * followed by an in-memory sort — which MongoDB aborts outright once the sort
+ * exceeds 32MB. These three cover every shape the dashboard issues.
+ */
+
+// An agent's own listings, newest first.
+PropertySchema.index({ owner: 1, createdAt: -1 });
+
+// Admin list filtered by status tab, newest first.
+PropertySchema.index({ status: 1, createdAt: -1 });
+// The hourly expiry run: approved listings whose month is up.
+PropertySchema.index({ status: 1, expiresAt: 1 });
+
+// Unfiltered admin list (and any plain newest-first sort).
+PropertySchema.index({ createdAt: -1 });
+
+// Area-scoped dashboard and public queries, newest first.
+PropertySchema.index({ area: 1, createdAt: -1 });
+
+// Every public list now also asks "is this still on the market, or did it sell
+// more than fifteen days ago?" — see the availability fields above.
+PropertySchema.index({ availability: 1, availabilityChangedAt: -1 });
+
+// The public list sorts featured first, then newest.
+PropertySchema.index({ status: 1, isFeatured: -1, createdAt: -1 });
+
+// The map explorer: listings inside a box.
+PropertySchema.index({ latitude: 1, longitude: 1 });

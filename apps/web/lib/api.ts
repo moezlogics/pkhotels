@@ -1,0 +1,967 @@
+// lib/api.ts
+import axios from "axios";
+import { BackendProperty } from "./types/property-utils";
+
+const getBaseURL = () => {
+  // Server-side (SSR/API routes): use internal URL to hit backend directly
+  // without going through nginx — avoids loopback issues on production
+  if (typeof window === "undefined") {
+    const internalUrl = process.env.INTERNAL_API_URL;
+    if (internalUrl) {
+      return internalUrl.endsWith("/")
+        ? `${internalUrl}api`
+        : `${internalUrl}/api`;
+    }
+  }
+
+  // Client-side (browser): use public-facing URL
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+  if (!apiUrl) return "/api";
+  return apiUrl.endsWith("/") ? `${apiUrl}api` : `${apiUrl}/api`;
+};
+
+/**
+ * The API base the browser itself should travel to.
+ *
+ * getBaseURL() above is for axios and may return an internal URL during SSR;
+ * this is for links the browser follows as a full navigation — the OAuth
+ * redirect, which cannot go through fetch().
+ */
+export function publicApiBaseUrl(): string {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+  if (!apiUrl) return "/api";
+  return apiUrl.endsWith("/") ? `${apiUrl}api` : `${apiUrl}/api`;
+}
+
+// In-memory access token storage — works even when cross-origin cookies are blocked
+let accessToken: string | null = null;
+
+export function setAccessToken(token: string | null) {
+  accessToken = token;
+  if (typeof window !== "undefined") {
+    if (token) {
+      localStorage.setItem("accessToken", token);
+    } else {
+      localStorage.removeItem("accessToken");
+    }
+  }
+}
+
+// Initialize from localStorage on module load
+if (typeof window !== "undefined") {
+  accessToken = localStorage.getItem("accessToken");
+}
+
+export function getAccessToken(): string | null {
+  // Always try localStorage as a fallback in case the in-memory value was lost
+  if (!accessToken && typeof window !== "undefined") {
+    accessToken = localStorage.getItem("accessToken");
+  }
+  return accessToken;
+}
+
+const api = axios.create({
+  baseURL: getBaseURL(),
+  withCredentials: true, // still send cookies when possible
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
+
+// Request interceptor — attach Bearer token from memory (or localStorage) for every request
+api.interceptors.request.use((config) => {
+  // Refresh from localStorage each time in case in-memory was lost (e.g. after SSR/page reload)
+  const token = getAccessToken();
+  if (token && config.headers) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+/**
+ * One refresh at a time, shared by everyone waiting on it.
+ *
+ * A dashboard screen fires five or six requests the moment it mounts. When the
+ * access token has expired they all come back 401 at the same instant, and
+ * without this each one started its own `/auth/refresh`. The winner stored a
+ * good token; the losers finished afterwards, and any that failed ran
+ * `setAccessToken(null)` — throwing away the perfectly valid token the winner
+ * had just saved. Every request after that had no credentials, so the page
+ * painted itself empty, and a manual reload "fixed" it because by then the
+ * token was back in localStorage.
+ *
+ * Now the first 401 starts the refresh and the rest await the same promise.
+ */
+let refreshInFlight: Promise<string | null> | null = null;
+
+export function refreshAccessToken(): Promise<string | null> {
+  if (!refreshInFlight) {
+    refreshInFlight = api
+      .post("/auth/refresh")
+      .then((response) => {
+        const token = (response.data?.token as string | undefined) ?? null;
+        if (token) setAccessToken(token);
+        return token;
+      })
+      .finally(() => {
+        // Cleared in a microtask, not synchronously: everyone who queued up
+        // behind this attempt resolves from it before the next 401 can start
+        // a second one.
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+// Response interceptor for auto refresh on 401
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    // Determine request type
+    const isRefreshRequest = originalRequest.url?.includes("/auth/refresh");
+    const isProfileRequest = originalRequest.url?.includes("/auth/profile");
+    const isOnAuthPage =
+      typeof window !== "undefined" &&
+      (window.location.pathname.includes("/login") ||
+        window.location.pathname.includes("/register"));
+
+    // For 401 errors, attempt refresh only for non-special requests
+    if (
+      error.response?.status === 401 &&
+      !originalRequest._retry &&
+      !isRefreshRequest &&
+      !isProfileRequest &&
+      !isOnAuthPage
+    ) {
+      originalRequest._retry = true;
+
+      try {
+        await refreshAccessToken();
+        // Retry the original request with the new token
+        const token = getAccessToken();
+        if (token && originalRequest.headers) {
+          originalRequest.headers.Authorization = `Bearer ${token}`;
+        }
+        return api(originalRequest);
+      } catch (refreshError) {
+        console.warn("Refresh token expired or missing → session ended");
+        // Clear stored token
+        setAccessToken(null);
+
+        if (typeof window !== "undefined") {
+          const isOnDashboard = window.location.pathname.includes("/dashboard");
+          if (isOnDashboard) {
+            // Small delay so any pending toasts can show before redirect
+            setTimeout(() => {
+              window.location.href = "/login?sessionExpired=true";
+            }, 300);
+          }
+        }
+
+        return Promise.reject(refreshError);
+      }
+    }
+
+    return Promise.reject(error);
+  },
+);
+
+// Property API types
+export interface PropertyResponse {
+  properties: BackendProperty[];
+  total: number;
+  totalPages: number;
+  currentPage: number;
+}
+
+/** Filters accepted by the paginated dashboard list endpoint. */
+export interface DashboardPropertyFilters {
+  page?: number;
+  /** 0 asks for everything in one page; the API caps it at 500. */
+  limit?: number;
+  status?: string;
+  propertyType?: string;
+  listingType?: string;
+  search?: string;
+  cityId?: string;
+  areaId?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  /** One agent's listings (an agency owner's team member; anyone for an admin). */
+  ownerId?: string;
+}
+
+export interface DashboardPropertyPage {
+  properties: BackendProperty[];
+  total: number;
+  totalPages: number;
+  currentPage: number;
+  limit: number;
+}
+
+export interface DashboardStats {
+  total: number;
+  byStatus: Record<string, number>;
+}
+
+/** An account the admin accepts payment into, shown at checkout. */
+export interface PaymentMethodRecord {
+  _id: string;
+  label: string;
+  type: "jazzcash" | "easypaisa" | "bank" | "other";
+  accountNumber: string;
+  accountTitle?: string;
+  instructions?: string;
+  isActive?: boolean;
+  order?: number;
+}
+
+/** One row of the listing performance table. */
+export interface ListingPerformanceRow {
+  _id: string;
+  title: string;
+  slug?: string;
+  status: string;
+  listingType?: "rent";
+  price: number;
+  views: number;
+  impressions: number;
+  phoneClicks: number;
+  whatsappClicks: number;
+  mainPhotoUrl?: string | null;
+  createdAt?: string;
+  marla?: number;
+  kanal?: number;
+  areaSize?: number;
+}
+
+/** GET /properties/analytics/me */
+export interface ListingPerformance {
+  totals: {
+    listings: number;
+    active: number;
+    views: number;
+    impressions: number;
+    phoneClicks: number;
+    whatsappClicks: number;
+    contacts: number;
+  };
+  byStatus: Record<string, number>;
+  listings: ListingPerformanceRow[];
+}
+
+// Property API functions
+export const propertyApi = {
+  // Get all approved properties
+  // Get all approved properties with pagination and filters
+  getAll: async (filters?: {
+    cityId?: string;
+    /** Every approved listing by one agent — their public profile page. */
+    ownerId?: string;
+    cityName?: string;
+    areaId?: string;
+    areaSlug?: string;
+    page?: number;
+    limit?: number;
+    priceMin?: number;
+    priceMax?: number;
+    areaMin?: number;
+    areaMax?: number;
+    marlaMin?: number;
+    marlaMax?: number;
+    beds?: number;
+    baths?: number;
+    type?: string;
+    purpose?: string;
+    search?: string;
+  }): Promise<PropertyResponse | BackendProperty[]> => {
+    const params = new URLSearchParams();
+    if (filters?.ownerId) params.append("ownerId", filters.ownerId);
+    if (filters?.cityId) params.append("cityId", filters.cityId);
+    if (filters?.cityName) params.append("city", filters.cityName);
+
+    if (filters?.areaId) params.append("areaId", filters.areaId);
+    if (filters?.search) params.append("search", filters.search);
+    if (filters?.page) params.append("page", filters.page.toString());
+    if (filters?.limit) params.append("limit", filters.limit.toString());
+    if (filters?.priceMin)
+      params.append("priceMin", filters.priceMin.toString());
+    if (filters?.priceMax)
+      params.append("priceMax", filters.priceMax.toString());
+    if (filters?.areaMin) params.append("areaMin", filters.areaMin.toString());
+    if (filters?.areaMax) params.append("areaMax", filters.areaMax.toString());
+    if (filters?.marlaMin)
+      params.append("marlaMin", filters.marlaMin.toString());
+    if (filters?.marlaMax)
+      params.append("marlaMax", filters.marlaMax.toString());
+    if (filters?.beds) params.append("beds", filters.beds.toString());
+    if (filters?.baths) params.append("baths", filters.baths.toString());
+    if (filters?.type && filters.type !== "all")
+      params.append("type", filters.type);
+    if (filters?.purpose && filters.purpose !== "all")
+      params.append("purpose", filters.purpose);
+
+    const queryString = params.toString();
+    const url = queryString ? `/properties?${queryString}` : "/properties";
+    const response = await api.get(url);
+    return response.data;
+  },
+
+  // Get dynamic property types
+  getTypes: async () => {
+    const response = await api.get("/properties/types");
+    return response.data;
+  },
+
+  // get property by id
+  getPropertyById: async (params: { id: string }) => {
+    const response = await api.get(`/properties/${params.id}`);
+    return response.data;
+  },
+  /**
+   * Dashboard list (includes draft / pending / approved / rejected).
+   *
+   * Paginated and filtered server-side. This used to take no arguments and
+   * return every property the caller could see, which is what made the
+   * dashboard slow to open.
+   */
+  getAllProperties: async (
+    filters?: DashboardPropertyFilters,
+    signal?: AbortSignal,
+  ): Promise<DashboardPropertyPage> => {
+    const params = new URLSearchParams();
+    if (filters?.page) params.append("page", String(filters.page));
+    if (filters?.limit !== undefined)
+      params.append("limit", String(filters.limit));
+    if (filters?.status && filters.status !== "all")
+      params.append("status", filters.status);
+    if (filters?.propertyType && filters.propertyType !== "all") {
+      params.append("propertyType", filters.propertyType);
+    }
+    if (filters?.listingType && filters.listingType !== "all") {
+      params.append("listingType", filters.listingType);
+    }
+    if (filters?.search?.trim()) params.append("search", filters.search.trim());
+    if (filters?.cityId) params.append("cityId", filters.cityId);
+    if (filters?.areaId) params.append("areaId", filters.areaId);
+    if (filters?.sortBy) params.append("sortBy", filters.sortBy);
+    if (filters?.sortDir) params.append("sortDir", filters.sortDir);
+    if (filters?.ownerId) params.append("ownerId", filters.ownerId);
+
+    const query = params.toString();
+    const response = await api.get(
+      query ? `/properties/all?${query}` : "/properties/all",
+      { signal },
+    );
+
+    // Tolerate the old unpaginated array shape, in case a stale API is still
+    // deployed while the front-end rolls out.
+    if (Array.isArray(response.data)) {
+      return {
+        properties: response.data,
+        total: response.data.length,
+        totalPages: 1,
+        currentPage: 1,
+        limit: response.data.length,
+      };
+    }
+    return response.data as DashboardPropertyPage;
+  },
+
+  /** Status counts for the dashboard tabs — one aggregation, not a full download. */
+  getDashboardStats: async (): Promise<DashboardStats> => {
+    const response = await api.get("/properties/all/stats");
+    return response.data as DashboardStats;
+  },
+
+  /**
+   * Listing performance: an agent's own numbers, or the whole platform for an
+   * admin. The same scoping as the dashboard list.
+   */
+  getPerformance: async (): Promise<ListingPerformance> => {
+    const response = await api.get("/properties/analytics/me");
+    return response.data as ListingPerformance;
+  },
+
+  // Get property by slug
+  getPropertyBySlug: async (params: { slug: string }) => {
+    const response = await api.get(`/properties/slug/${params.slug}`);
+    return response.data;
+  },
+
+  updateStatus: async (
+    propertyId: string,
+    status?: "pending" | "approved" | "rejected" | "draft",
+  ) => {
+    const response = await api.patch(
+      `/properties/${propertyId}/update-status`,
+      status ? { status } : {},
+    );
+    return response.data;
+  },
+
+  /** Another month for a Free-plan listing, or an expired one back on the site. */
+  renew: async (propertyId: string): Promise<{ _id: string; status: string; expiresAt: string | null }> => {
+    const response = await api.post(`/properties/${propertyId}/renew`);
+    return response.data;
+  },
+
+  /** Pin a listing to the top of the public lists. The admin, or the agency that owns it. */
+  setFeatured: async (propertyId: string, isFeatured: boolean) => {
+    const response = await api.patch(`/properties/${propertyId}/featured`, {
+      isFeatured,
+    });
+    return response.data;
+  },
+
+  /**
+   * Mark a listing rented, or back on the market.
+   *
+   * Separate from updateStatus: that one is moderation (draft → pending →
+   * approved) and is mostly the admin's. This one belongs to whoever owns the
+   * listing, and never moves it back into the approval queue.
+   */
+  setAvailability: async (
+    propertyId: string,
+    availability: "available" | "rented",
+  ) => {
+    const response = await api.patch(`/properties/${propertyId}/availability`, {
+      availability,
+    });
+    return response.data;
+  },
+
+  // Create a new property
+  create: async (data: FormData) => {
+    const response = await api.post("/properties", data, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+    return response.data;
+  },
+
+  // Update a property
+  update: async (propertyId: string, data: FormData) => {
+    const response = await api.put(`/properties/${propertyId}`, data, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+    return response.data;
+  },
+
+  // Delete a property
+  delete: async (propertyId: string) => {
+    const response = await api.delete(`/properties/${propertyId}`);
+    return response.data;
+  },
+
+  // Get location statistics
+  getLocationStats: async (
+    city: string,
+    listingType?: string,
+    propertyType?: string,
+  ) => {
+    const params = new URLSearchParams();
+    params.append("city", city);
+    if (listingType) params.append("listingType", listingType);
+    if (propertyType) params.append("propertyType", propertyType);
+
+    const response = await api.get(
+      `/properties/stats/locations?${params.toString()}`,
+    );
+    return response.data;
+  },
+
+  // Upload image
+  uploadImage: async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await api.post("/properties/upload", formData, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+    return response.data;
+  },
+};
+
+// Blog API functions
+export const blogApi = {
+  // Get all published blogs (for public frontend)
+  getPublishedBlogs: async () => {
+    const response = await api.get("/blog/published");
+    return response.data;
+  },
+
+  // Get all blogs (for admin dashboard - can filter by status)
+  getAllBlogs: async (status?: string) => {
+    const url = status ? `/blog?status=${status}` : "/blog";
+    const response = await api.get(url);
+    return response.data;
+  },
+
+  // Get blog by ID
+  getBlogById: async (id: string) => {
+    const response = await api.get(`/blog/${id}`);
+    return response.data;
+  },
+
+  // Get blog by slug (SEO-friendly URL)
+  getBlogBySlug: async (slug: string) => {
+    const response = await api.get(`/blog/slug/${slug}`);
+    return response.data;
+  },
+
+  // Increment blog views (for analytics)
+  incrementViews: async (id: string) => {
+    await api.post(`/blog/${id}/views`);
+  },
+};
+
+// Package API functions
+export interface PlanPerks {
+  verifiedBadge: boolean;
+  teamMembers: number;
+  socialLinks: boolean;
+  brandedProfile: boolean;
+  autoPublish: boolean;
+  spotlight: boolean;
+  /** A public profile page and the links to it. */
+  profilePage?: boolean;
+  /** Photos a listing may have. */
+  photosPerProperty?: number;
+}
+
+/** The plan in force for the signed-in account (an agency's agent: the agency's plan). */
+export interface MyPlan {
+  tier: "free" | "paid";
+  name: string;
+  propertyLimit: number;
+  used: number;
+  remaining: number;
+  canCreate: boolean;
+  featuredLimit: number;
+  perks: PlanPerks;
+  endDate: string | null;
+  team: { role: "owner" | "agent" | null; agencyId: string | null; members: number };
+}
+
+export interface AccountRow {
+  _id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: string;
+  companyName: string;
+  avatarUrl: string;
+  verified: boolean;
+  isActive: boolean;
+  createdAt: string;
+  plan: { name: string; endDate: string | null; paid: boolean; granted: boolean; subscriptionId: string | null };
+  pendingInvoice: { status: string; planName: string; amount: number } | null;
+  listings: { total: number; live: number };
+  teamSize: number;
+  agency: { _id: string; name: string } | null;
+}
+
+export interface AccountsPage {
+  total: number;
+  page: number;
+  totalPages: number;
+  rows: AccountRow[];
+}
+
+export interface TeamMember {
+  _id: string;
+  name: string;
+  email: string;
+  phone: string;
+  isActive: boolean;
+  createdAt?: string;
+  /** The owner's cap for this agent; 0 = none of their own (the team's plan limit applies). */
+  listingLimit: number;
+  listings: { total: number; live: number; pending: number; expired: number; featured: number };
+  stats: { views: number; calls: number; whatsapp: number };
+}
+
+export interface TeamOverview {
+  limit: number;
+  planName: string;
+  pool: { limit: number; used: number; featuredLimit: number };
+  owner: { listings: TeamMember["listings"]; stats: TeamMember["stats"] };
+  members: TeamMember[];
+}
+
+/** An agency owner's agent accounts (the agency plans). */
+export const teamApi = {
+  list: async (): Promise<TeamOverview> => {
+    const response = await api.get("/team");
+    return response.data.data;
+  },
+  create: async (data: { name: string; email: string; password: string; phone?: string; listingLimit?: number }): Promise<TeamMember> => {
+    const response = await api.post("/team", data);
+    return response.data.data;
+  },
+  update: async (id: string, data: { name?: string; phone?: string; email?: string; isActive?: boolean; password?: string; listingLimit?: number | null }) => {
+    const response = await api.patch(`/team/${id}`, data);
+    return response.data.data;
+  },
+  /** One listing of the team to the owner (no `to`) or an agent. */
+  assign: async (propertyId: string, to?: string): Promise<{ _id: string; owner: string }> => {
+    const response = await api.post(`/team/listings/${propertyId}/assign`, { to });
+    return response.data.data;
+  },
+  /** Move all of an agent's listings to the owner (no `to`) or another agent. */
+  transfer: async (id: string, to?: string): Promise<{ moved: number; to: string }> => {
+    const response = await api.post(`/team/${id}/transfer`, { to });
+    return response.data.data;
+  },
+  remove: async (id: string, to?: string): Promise<{ removed: boolean; listingsMoved: number }> => {
+    const response = await api.delete(`/team/${id}`, { params: to ? { to } : {} });
+    return response.data.data;
+  },
+};
+
+export const packageApi = {
+  getAll: async () => {
+    const response = await api.get("/packages");
+    return response.data;
+  },
+
+  getAllIncludingInactive: async () => {
+    const response = await api.get("/packages/all");
+    return response.data;
+  },
+
+  getById: async (id: string) => {
+    const response = await api.get(`/packages/${id}`);
+    return response.data;
+  },
+
+  create: async (dto: any) => {
+    const response = await api.post("/packages", dto);
+    return response.data;
+  },
+
+  update: async (id: string, dto: any) => {
+    const response = await api.put(`/packages/${id}`, dto);
+    return response.data;
+  },
+
+  delete: async (id: string) => {
+    const response = await api.delete(`/packages/${id}`);
+    return response.data;
+  },
+};
+
+// Subscription API functions
+export const subscriptionApi = {
+  purchase: async (packageId: string) => {
+    const response = await api.post("/subscriptions/purchase", { packageId });
+    return response.data;
+  },
+
+  getMySubscriptions: async () => {
+    const response = await api.get("/subscriptions/my-subscriptions");
+    return response.data;
+  },
+
+  getActiveSubscription: async () => {
+    const response = await api.get("/subscriptions/active");
+    return response.data;
+  },
+
+  /**
+   * The accounts an agent can pay into. Signed-in callers only — it is the
+   * checkout page, not public information.
+   */
+  getPaymentMethods: async (): Promise<PaymentMethodRecord[]> => {
+    const response = await api.get("/payment-methods");
+    return response.data?.data ?? [];
+  },
+
+  /** Admin: every account, including the switched-off ones. */
+  getAllPaymentMethods: async (): Promise<PaymentMethodRecord[]> => {
+    const response = await api.get("/payment-methods/all");
+    return response.data?.data ?? [];
+  },
+
+  savePaymentMethod: async (
+    id: string | null,
+    data: Partial<PaymentMethodRecord>,
+  ) => {
+    const response = id
+      ? await api.put(`/payment-methods/${id}`, data)
+      : await api.post("/payment-methods", data);
+    return response.data?.data;
+  },
+
+  deletePaymentMethod: async (id: string) => {
+    const response = await api.delete(`/payment-methods/${id}`);
+    return response.data;
+  },
+
+  /** "I have paid" — the screenshot and how it was sent. */
+  submitPayment: async (
+    invoiceId: string,
+    data: {
+      paymentScreenshotUrl: string;
+      paymentMethod?: string;
+      paymentNote?: string;
+    },
+  ) => {
+    const response = await api.post(`/subscriptions/${invoiceId}/payment`, data);
+    return response.data;
+  },
+
+  /** Admin: the payment could not be verified. */
+  /** End a subscription now. An admin may cancel anyone's. */
+  cancelSubscription: async (subscriptionId: string) => {
+    const response = await api.put(`/subscriptions/${subscriptionId}/cancel`);
+    return response.data;
+  },
+
+  /**
+   * Hand an agent a plan outright, with no invoice.
+   *
+   * For the dealer who paid cash at the office, or an agency being courted.
+   * It takes effect immediately — same entitlement as a purchased plan.
+   */
+  assignPlan: async (userId: string, packageId: string) => {
+    const response = await api.post("/subscriptions/assign", {
+      userId,
+      packageId,
+    });
+    return response.data;
+  },
+
+  rejectPayment: async (invoiceId: string, reason: string) => {
+    const response = await api.put(`/subscriptions/${invoiceId}/reject`, { reason });
+    return response.data;
+  },
+
+  /**
+   * The plan in force right now, including the Free tier that every account has
+   * without buying anything. Use this to describe what someone has;
+   * `getActiveSubscription` only knows about paid rows.
+   */
+  getMyPlan: async (): Promise<MyPlan> => {
+    const response = await api.get("/subscriptions/my-plan");
+    return response.data;
+  },
+
+  canCreateProperty: async () => {
+    const response = await api.get("/subscriptions/can-create-property");
+    return response.data;
+  },
+
+  getAll: async () => {
+    const response = await api.get("/subscriptions");
+    return response.data;
+  },
+
+  /** Admin: every account with its plan — Free ones included. Paged. */
+  getAccounts: async (params: { search?: string; plan?: string; page?: number; limit?: number }): Promise<AccountsPage> => {
+    const response = await api.get("/subscriptions/accounts", { params });
+    return response.data;
+  },
+
+  getById: async (id: string) => {
+    const response = await api.get(`/subscriptions/${id}`);
+    return response.data;
+  },
+
+  activate: async (id: string) => {
+    const response = await api.put(`/subscriptions/${id}/activate`);
+    return response.data;
+  },
+
+  cancel: async (id: string) => {
+    const response = await api.put(`/subscriptions/${id}/cancel`);
+    return response.data;
+  },
+};
+
+export const importApi = {
+  importWordPress: async (formData: FormData) => {
+    const response = await api.post("/import/wordpress", formData, {
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+    return response.data; // { totalFound, imported, skipped, ... }
+  },
+};
+
+// City API functions
+export const cityApi = {
+  /**
+   * Just names (and photo) — for dropdowns. The full list carries every
+   * city's SEO content (~1 MB). Falls back to it on an API without /names.
+   */
+  getNames: async (): Promise<{ _id: string; name: string; thumbnail?: string }[]> => {
+    try {
+      const response = await api.get("/cities/names");
+      if (Array.isArray(response.data)) return response.data;
+    } catch {
+      // older API
+    }
+    const response = await api.get("/cities");
+    return (response.data ?? []).map((c: any) => ({ _id: c._id, name: c.name, thumbnail: c.thumbnail }));
+  },
+  getAll: async () => {
+    const response = await api.get("/cities");
+    return response.data;
+  },
+  getById: async (id: string) => {
+    const response = await api.get(`/cities/${id}`);
+    return response.data;
+  },
+  getByName: async (name: string) => {
+    const response = await api.get(`/cities/name/${name}`);
+    return response.data;
+  },
+};
+
+// Area API functions
+export const areaApi = {
+  /**
+   * id, name, slug — for dropdowns and the location panel, optionally for one
+   * city. The full documents carry each area's SEO content. Falls back to the
+   * full list on an API without /names.
+   */
+  getNames: async (cityId?: string): Promise<{ _id: string; name: string; areaSlug?: string; city?: string }[]> => {
+    try {
+      const response = await api.get("/areas/names", { params: cityId ? { cityId } : {} });
+      if (Array.isArray(response.data)) return response.data;
+    } catch {
+      // older API
+    }
+    const response = await api.get(cityId ? `/areas?cityId=${cityId}` : "/areas");
+    return (response.data ?? []).map((a: any) => ({ _id: a._id, name: a.name, areaSlug: a.areaSlug, city: a.city?._id ?? a.city }));
+  },
+  getAll: async () => {
+    const response = await api.get("/areas");
+    return response.data;
+  },
+  getAreasByCity: async (cityId: string) => {
+    const response = await api.get(`/areas?cityId=${cityId}`);
+    return response.data;
+  },
+  getById: async (id: string) => {
+    const response = await api.get(`/areas/${id}`);
+    return response.data;
+  },
+  getBySlug: async (slug: string, cityId?: string) => {
+    const url = cityId
+      ? `/areas/slug/${slug}?cityId=${cityId}`
+      : `/areas/slug/${slug}`;
+    const response = await api.get(url);
+    return response.data;
+  },
+};
+
+// User API functions
+export const userApi = {
+  getAll: async () => {
+    const response = await api.get("/users");
+    return response.data;
+  },
+  /** Role counts for the overview — avoids downloading every user to call .length. */
+  getStats: async (): Promise<{
+    total: number;
+    byRole: Record<string, number>;
+    inactive: number;
+  }> => {
+    const response = await api.get("/users/stats");
+    return response.data;
+  },
+  /** The signed-in user's own record. Authenticated, not admin-only. */
+  getMe: async () => {
+    const response = await api.get("/users/me");
+    return response.data;
+  },
+  /**
+   * Update your own name / phone. Any other field is rejected server-side, so
+   * this cannot be used to change a role or reactivate an account.
+   */
+  /**
+   * Turn this account into an agent account. Called when someone opens the
+   * listing form — the role follows what they are doing.
+   */
+  becomeAgent: async (): Promise<{ success: boolean; role: string }> => {
+    const response = await api.post("/users/me/become-agent");
+    return response.data;
+  },
+
+  /** The fields PATCH /users/me accepts — see UpdateProfileDto on the API. */
+  updateMe: async (data: {
+    name?: string;
+    phone?: string;
+    whatsappNumber?: string;
+    companyName?: string;
+    bio?: string;
+    experienceYears?: number;
+    address?: string;
+    /** City id; empty clears it. */
+    city?: string;
+    avatarUrl?: string;
+    coverUrl?: string;
+    socialLinks?: { facebook?: string; instagram?: string; youtube?: string; tiktok?: string; linkedin?: string; website?: string };
+  }) => {
+    const response = await api.patch("/users/me", data);
+    return response.data;
+  },
+  getById: async (id: string) => {
+    const response = await api.get(`/users/${id}`);
+    return response.data;
+  },
+  update: async (id: string, data: any) => {
+    const response = await api.patch(`/users/${id}`, data);
+    return response.data;
+  },
+  delete: async (id: string) => {
+    const response = await api.delete(`/users/${id}`);
+    return response.data;
+  },
+};
+
+// Page API functions
+export const pageApi = {
+  getAll: async () => {
+    const response = await api.get("/page");
+    return response.data;
+  },
+  getPublished: async () => {
+    const response = await api.get("/page/published");
+    return response.data;
+  },
+  getById: async (id: string) => {
+    const response = await api.get(`/page/${id}`);
+    return response.data;
+  },
+  getBySlug: async (slug: string) => {
+    const response = await api.get(`/page/slug/${slug}`);
+    return response.data;
+  },
+};
+
+/** Settings → Appearance: the site's colours, radius, font, logo and hero text. */
+export const siteSettingsApi = {
+  get: async (): Promise<import("./site-settings").SiteSettings> => {
+    const response = await api.get("/site-settings");
+    return response.data?.data;
+  },
+  save: async (
+    data: Partial<import("./site-settings").SiteSettings>,
+  ): Promise<import("./site-settings").SiteSettings> => {
+    const response = await api.put("/site-settings", data);
+    return response.data?.data;
+  },
+};
+
+export default api;

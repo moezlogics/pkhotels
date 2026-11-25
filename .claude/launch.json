@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "pakhotels-api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start:dev", "--workspace=apps/api"],
+      "port": 3205,
+      "autoPort": false
+    },
+    {
+      "name": "pakhotels-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start", "--workspace=apps/web", "--", "-p", "3200"],
+      "port": 3200,
+      "autoPort": false
+    }
+  ]
+}

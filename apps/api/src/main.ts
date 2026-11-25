@@ -1,0 +1,176 @@
+import { HttpAdapterHost } from '@nestjs/core';
+import { DiscordService } from './notify/discord.service';
+import { ErrorAlertFilter } from './notify/error-alert.filter';
+import 'reflect-metadata';
+import 'tsconfig-paths/register';
+import { NestFactory } from '@nestjs/core';
+// Reload triggered by Antigravity at 2026-03-11
+import { AppModule } from './app.module';
+import { ValidationPipe } from '@nestjs/common';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import cookieParser from 'cookie-parser';
+import compression from 'compression';
+import helmet from 'helmet';
+import * as path from 'path';
+import { thumbsMiddleware } from './media/thumbs';
+
+async function bootstrap() {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  /**
+   * 🚀 PERF / 🔒 SECURITY: trust the reverse proxy.
+   *
+   * Nginx terminates TLS and proxies to this process on localhost, so without
+   * this every request looked like it came from 127.0.0.1. The global
+   * ThrottlerGuard keys its buckets on `req.ip`, which meant the whole site —
+   * every visitor, every dashboard page — shared ONE 10-requests-per-second
+   * budget and started returning 429s under trivial load. Trusting the proxy
+   * restores per-client IPs, so the limits apply per user as intended.
+   *
+   * `loopback` only: we trust X-Forwarded-For when the immediate peer is the
+   * local Nginx, and never when a request arrives directly from the internet
+   * (which would let anyone spoof their way past the rate limiter).
+   */
+  app.set('trust proxy', 'loopback');
+
+  /**
+   * 🚀 PERF: gzip/deflate responses.
+   *
+   * The dashboard list endpoints return large JSON arrays — property records
+   * carry descriptions and photo-URL arrays — and none of it was compressed.
+   * JSON of this shape typically shrinks by 80-90%, which is the single
+   * cheapest win available on the admin panel's perceived load time.
+   */
+  app.use(
+    compression({
+      // Below ~1KB the header overhead outweighs the saving.
+      threshold: 1024,
+    }),
+  );
+
+  // 🔒 SECURITY: Add Helmet security headers (CRITICAL)
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          scriptSrc: ["'self'"],
+          imgSrc: ["'self'", 'data:', 'https:', 'http:', '*'],
+        },
+      },
+      crossOriginEmbedderPolicy: false,
+    }),
+  );
+
+  app.use(cookieParser());
+
+  // Increase body limit for large file and video uploads
+  const { json, urlencoded } = require('express');
+  app.use(json({ limit: '150mb' }));
+  app.use(urlencoded({ extended: true, limit: '150mb' }));
+
+  // Increase timeout for slow requests (e.g. video uploads)
+  app.use((req: any, res: any, next: any) => {
+    req.setTimeout(300000); // 5 minutes
+    res.setTimeout(300000); // 5 minutes
+    next();
+  });
+
+  // Resized photos at /img/<width>/<path under /uploads> — cached on disk and at Cloudflare.
+  {
+    const cwd = process.cwd();
+    const inApi =
+      cwd.includes(path.join('apps', 'api')) ||
+      cwd.endsWith(path.join('apps', 'api'));
+    app.use(
+      '/img',
+      thumbsMiddleware(
+        inApi
+          ? path.join(cwd, '..', '..', 'uploads')
+          : path.join(cwd, 'uploads'),
+      ),
+    );
+  }
+
+  // NOTE: HTTPS redirect removed — Nginx handles HTTPS, NestJS runs on HTTP internally
+
+  // Serve static files for local storage - handled by ServeStaticModule in AppModule
+  console.log(`🚀 API starting Middleware initialized...`);
+
+  const allowedOrigins = [
+    process.env.APP_URL || 'http://localhost:3200',
+    'http://localhost:3200',
+    'http://localhost:3210',
+    'http://localhost:3205',
+    'https://pakhotels.pk',
+    'http://pakhotels.pk',
+    'https://www.pakhotels.pk',
+    'http://www.pakhotels.pk',
+  ];
+
+  // Add Vercel deployment URL for production
+  if (process.env.VERCEL_URL) {
+    allowedOrigins.push(`https://${process.env.VERCEL_URL}`);
+  }
+
+  // Add other production domains if specified
+  if (
+    process.env.FRONTEND_URL &&
+    !allowedOrigins.includes(process.env.FRONTEND_URL)
+  ) {
+    allowedOrigins.push(process.env.FRONTEND_URL);
+  }
+
+  console.log('✅ Allowed Origins:', allowedOrigins);
+
+  // 🔒 SECURITY: Improved CORS configuration (CRITICAL)
+  app.enableCors({
+    origin: (origin, callback) => {
+      if (!origin) {
+        if (process.env.NODE_ENV === 'production') {
+          console.warn('⚠️ Request with no origin in production');
+        }
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`🚫 CORS blocked origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
+    maxAge: 3600,
+  });
+
+  app.setGlobalPrefix('api');
+  // A server error (500) is announced in Discord, once per 30 minutes per error.
+  app.useGlobalFilters(
+    new ErrorAlertFilter(
+      app.get(DiscordService),
+      app.get(HttpAdapterHost).httpAdapter,
+    ),
+  );
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: false,
+      skipMissingProperties: true,
+    }),
+  );
+
+  const port = process.env.PORT || 3205;
+  await app.listen(port);
+
+  console.log(`🚀 API server is running on port: ${port}`);
+  console.log(
+    `📡 Health check available at: http://localhost:${port}/api/hello`,
+  );
+}
+bootstrap();

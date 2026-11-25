@@ -1,0 +1,60 @@
+{
+  "extends": "../../packages/typescript-config/nestjs.json",
+  "compilerOptions": {
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2022",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "../../",
+    "baseUrl": "./",
+    "paths": {
+      "@nestjs/*": [
+        "../../node_modules/@nestjs/*"
+      ],
+      "@pakhotels/db": [
+        "../../packages/db/src"
+      ],
+      "@pakhotels/db/*": [
+        "../../packages/db/src/*"
+      ],
+      "@pakhotels/dtos/*": [
+        "../../packages/dtos/*"
+      ],
+      "@pakhotels/types/*": [
+        "../../packages/types/src/*"
+      ],
+      "@pakhotels/storage": [
+        "../../packages/storage/storage.module"
+      ],
+      "@pakhotels/storage/*": [
+        "../../packages/storage/*"
+      ]
+    },
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "strictPropertyInitialization": false,
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitAny": false,
+    "strictBindCallApply": false,
+    "noFallthroughCasesInSwitch": false
+  },
+  "include": [
+    "src/**/*",
+    "../../packages/db/src/**/*",
+    "../../packages/types/src/**/*",
+    "../../packages/storage/src/**/*",
+    "../../packages/storage/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.spec.ts"
+  ]
+}

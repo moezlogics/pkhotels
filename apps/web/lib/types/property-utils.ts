@@ -1,0 +1,233 @@
+import { Property } from '../data';
+
+// Backend property type (from API response)
+export interface BackendProperty {
+  _id: string;
+  listingType: 'rent';
+  propertyType:
+    | 'house'
+    | 'upper-portion'
+    | 'lower-portion'
+    | 'flat'
+    | 'apartment'
+    | 'room'
+    | 'hostel'
+    | 'shop'
+    | 'office'
+    | 'warehouse'
+    | 'commercial';
+  city?: string; // Legacy field, may not be present
+  slug?: string;
+  area?: {
+    _id: string;
+    name: string;
+    areaSlug: string;
+    city?: {
+      _id: string;
+      name: string;
+      areaSlug: string;
+      state: string;
+      country: string;
+    };
+  } | string; // Can be populated object (Area) or ObjectId string
+  title: string;
+  location: string;
+  bedrooms: number;
+  bathrooms: number;
+  areaSize?: number; // Property size in sq ft (new field)
+  price: number;
+  marla?: number;
+  kanal?: number;
+  /** The marla (sq ft) the size was entered in — its city's; 225 when absent. */
+  marlaSqft?: number;
+  description: string;
+  contactNumber: string;
+  whatsappNumber?: string;
+  features?: string[];
+  mainPhotoUrl?: string;
+  additionalPhotosUrls?: string[];
+  status: 'pending' | 'approved' | 'rejected' | 'draft' | 'expired';
+  /** Free plan: when the listing stops being live (renewable). Empty on paid plans. */
+  expiresAt?: string | null;
+  /** Pinned to the top of the public lists by an admin. */
+  isFeatured?: boolean;
+  /** The owner holds a plan with the verified badge (or is an agent of such an agency). */
+  ownerVerified?: boolean;
+  /** Rented, which is a different question from moderation status. */
+  availability?: 'available' | 'rented';
+  availabilityChangedAt?: string | null;
+  source?: string;
+  externalId?: string;
+  sourceUrl?: string;
+  sourceOwnerName?: string;
+  sourceOwnerPhone?: string;
+  sourceOwnerWhatsapp?: string;
+  sourceOwnerProfileUrl?: string;
+  owner?: any;
+  /*
+   * Performance counters. Absent on listings that predate them, and on the
+   * public endpoints that do not project them — always read with `?? 0`.
+   */
+  /** Listing-brain verdict: why this is (or is not) in the approval queue. */
+  moderationScore?: number;
+  moderationReasons?: string[];
+  autoPublished?: boolean;
+  views?: number;
+  impressions?: number;
+  phoneClicks?: number;
+  whatsappClicks?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  latitude?: number;
+  longitude?: number;
+  videoUrl?: string | null;
+  /** Poster frame for videoUrl, captured when the clip was uploaded. */
+  videoPosterUrl?: string | null;
+}
+
+export const PROPERTY_TYPE_ORDER = [
+  'house',
+  'upper-portion',
+  'lower-portion',
+  'flat',
+  'apartment',
+  'room',
+  'hostel',
+  'shop',
+  'office',
+  'warehouse',
+  'commercial',
+];
+
+export function sortPropertyTypes<T>(types: T[], getTypeValue: (t: T) => string): T[] {
+  return [...types].sort((a, b) => {
+    const valA = getTypeValue(a).toLowerCase();
+    const valB = getTypeValue(b).toLowerCase();
+    const indexA = PROPERTY_TYPE_ORDER.indexOf(valA);
+    const indexB = PROPERTY_TYPE_ORDER.indexOf(valB);
+
+    if (indexA === -1 && indexB === -1) return valA.localeCompare(valB);
+    if (indexA === -1) return 1;
+    if (indexB === -1) return -1;
+    return indexA - indexB;
+  });
+}
+
+function toSlug(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// Map backend property to frontend property format
+export function mapBackendToFrontendProperty(backend: BackendProperty): Property {
+  // Map propertyType to frontend format (capitalize first letter)
+  const typeMap: Record<string, string> = {
+    house: 'House',
+    'upper-portion': 'Upper Portion',
+    'lower-portion': 'Lower Portion',
+    flat: 'Flat',
+    apartment: 'Apartment',
+    room: 'Room',
+    hostel: 'Hostel',
+    shop: 'Shop',
+    office: 'Office',
+    warehouse: 'Warehouse',
+    commercial: 'Commercial',
+  };
+
+
+
+  // Extract city name from area.city or fallback to legacy city field
+  let cityName = backend.city || '';
+  let citySlug = '';
+  if (backend.area && typeof backend.area === 'object') {
+    cityName = backend.area.city?.name || cityName;
+    citySlug = backend.area.city?.areaSlug || '';
+  }
+  // Fallback: derive city slug from city name if not available
+  if (!citySlug && cityName) {
+    citySlug = toSlug(cityName);
+  }
+
+  // Extract area name and slug
+  const areaName = (backend.area && typeof backend.area === 'object') ? backend.area.name : '';
+  const areaSlug = (backend.area && typeof backend.area === 'object') ? backend.area.areaSlug : '';
+
+  // Convert image URL to full URL if it's a relative path
+  const getImageUrl = (url?: string | null): string => {
+    if (!url) return '';
+    // If it's already a full URL, return as is
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    // If it's a relative path like /uploads/..., use Next.js proxy (works in dev and prod)
+    if (url.startsWith('/uploads')) {
+      // Use the proxy path which Next.js will rewrite to the API server
+      return url; // Next.js rewrite will handle /uploads/... -> http://localhost:3001/uploads/...
+    }
+    return url;
+  };
+
+  const hasRealPhoto = Boolean(backend.mainPhotoUrl && backend.mainPhotoUrl.trim() !== '');
+  const hasPoster = Boolean(backend.videoPosterUrl && backend.videoPosterUrl.trim() !== '');
+  const hasVideo = Boolean(backend.videoUrl && backend.videoUrl.trim() !== '');
+
+  let displayImage = '';
+  let isVideoThumbnail = false;
+
+  if (hasRealPhoto) {
+    displayImage = getImageUrl(backend.mainPhotoUrl);
+  } else if (hasPoster) {
+    displayImage = getImageUrl(backend.videoPosterUrl);
+    isVideoThumbnail = true;
+  } else if (hasVideo) {
+    displayImage = '';
+    isVideoThumbnail = true;
+  } else {
+    displayImage = 'https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=800&q=80';
+  }
+
+  return {
+    id: backend._id,
+    name: backend.title,
+    slug: backend.slug || toSlug(backend.title),
+    type: (typeMap[backend.propertyType] || 'House') as Property['type'],
+    city: cityName,
+    citySlug: citySlug,
+    location: backend.location,
+    price: backend.price,
+    bedrooms: backend.bedrooms,
+    bathrooms: backend.bathrooms,
+    area: backend.areaSize || 0, // Property size in sq ft
+    areaSlug: areaSlug,
+    marla: backend.marla,
+    kanal: backend.kanal,
+    marlaSqft: backend.marlaSqft,
+    purpose: 'rent',
+    image: displayImage,
+    // Shown as a camera count on the card, as every listing portal does.
+    photoCount:
+      (hasRealPhoto ? 1 : 0) +
+      (backend.additionalPhotosUrls?.filter((url) => Boolean(url && url.trim())).length ?? 0),
+    description: backend.description,
+    // "Added 3 days ago" on the card.
+    postedAt: backend.createdAt,
+    features: backend.features || [],
+    areaId: backend.area && typeof backend.area === 'object' ? backend.area._id : (typeof backend.area === 'string' ? backend.area : undefined),
+    areaName: areaName,
+    latitude: backend.latitude,
+    longitude: backend.longitude,
+    whatsappNumber: backend.whatsappNumber,
+    contactNumber: backend.contactNumber,
+    isFeatured: Boolean(backend.isFeatured),
+    ownerVerified: Boolean(backend.ownerVerified),
+    availability: backend.availability === 'rented' ? 'rented' : 'available',
+    videoUrl: backend.videoUrl || null,
+    videoPosterUrl: backend.videoPosterUrl || null,
+    isVideoThumbnail,
+  };
+}
+

@@ -1,0 +1,636 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  Play,
+  Share2,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
+import { toast } from "sonner";
+import { photo, photoSrcSet } from "@/lib/img";
+
+/**
+ * The listing gallery.
+ *
+ * One scroll-snapping track rather than a carousel library: swiping on a phone
+ * is then the browser's own scrolling — no jank, no touch handlers fighting the
+ * page — and the desktop arrows and thumbnails just scroll it to a slide.
+ *
+ * Photos are letterboxed onto a blurred copy of themselves instead of grey
+ * bars, because property photos arrive in every shape a phone can produce.
+ *
+ * The walkthrough video is the last slide. Reaching it starts it playing,
+ * muted, the way a reel does; scrolling away pauses it so a tenant never has
+ * audio following them down the page.
+ */
+
+interface GalleryItem {
+  type: "image" | "video";
+  url: string;
+  alt: string;
+  poster?: string;
+}
+
+interface HotelGalleryProps {
+  images: string[];
+  title: string;
+  alts?: string[];
+  videoUrl?: string | null;
+  videoPoster?: string | null;
+  /** Rendered over the top-left corner, e.g. "For Rent". */
+  badge?: string;
+  /** Rendered along the bottom-left edge of the photo — the price strip. */
+  priceTag?: React.ReactNode;
+  /** "Rented out": stamps the photo and greys it. */
+  closedLabel?: string | null;
+  /** A featured listing: a "Featured" tag beside the badge. */
+  featured?: boolean;
+  /** Desktop: a photo mosaic (one large, four small) instead of the carousel. */
+  mosaic?: boolean;
+}
+
+export default function HotelGallery({
+  images,
+  title,
+  alts = [],
+  videoUrl,
+  videoPoster,
+  badge,
+  priceTag,
+  closedLabel,
+  featured = false,
+  mosaic = false,
+}: HotelGalleryProps) {
+  /*
+   * Memoised because the autoplay effect below depends on it — rebuilt every
+   * render, that effect would re-run constantly and restart the video.
+   */
+  const items: GalleryItem[] = useMemo(
+    () => [
+      ...images.map((url, index) => ({
+        type: "image" as const,
+        url,
+        alt: alts[index] || `${title} — photo ${index + 1}`,
+      })),
+      ...(videoUrl
+        ? [
+            {
+              type: "video" as const,
+              url: videoUrl,
+              alt: `${title} — walkthrough video`,
+              poster: videoPoster || undefined,
+            },
+          ]
+        : []),
+    ],
+    [images, alts, title, videoUrl, videoPoster],
+  );
+
+  const total = items.length;
+
+  const [active, setActive] = useState(0);
+  const [lightbox, setLightbox] = useState(false);
+  const [muted, setMuted] = useState(true);
+
+  const trackRef = useRef<HTMLDivElement>(null);
+  const thumbsRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const lightboxVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  const activeRef = useRef(0);
+  const programmatic = useRef(false);
+  const dragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartScroll = useRef(0);
+  const dragged = useRef(false);
+
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
+
+  /** Keep the thumbnail strip centred on the current slide. */
+  useEffect(() => {
+    const strip = thumbsRef.current;
+    const child = strip?.children[active] as HTMLElement | undefined;
+    if (!strip || !child) return;
+    strip.scrollTo({
+      left: child.offsetLeft - (strip.clientWidth - child.clientWidth) / 2,
+      behavior: "smooth",
+    });
+  }, [active]);
+
+  /*
+   * Autoplay the video when it is the slide being looked at, and pause it the
+   * moment it is not. Muted, because a browser will refuse to autoplay with
+   * sound and a tenant scrolling a listing has not asked for any.
+   */
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (items[active]?.type === "video" && !lightbox) {
+      video.muted = muted;
+      video.play().catch(() => {
+        // Autoplay refused (data saver, low power mode). The controls are there.
+      });
+    } else {
+      video.pause();
+    }
+  }, [active, lightbox, muted, items]);
+
+  const scrollToSlide = useCallback(
+    (index: number) => {
+      if (total === 0) return;
+      const target = (index + total) % total;
+      activeRef.current = target;
+      setActive(target);
+
+      const track = trackRef.current;
+      if (!track) return;
+
+      programmatic.current = true;
+      const child = track.children[target] as HTMLElement | undefined;
+      if (child?.scrollIntoView) {
+        child.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" });
+      } else {
+        track.scrollTo({ left: target * track.clientWidth, behavior: "smooth" });
+      }
+      setTimeout(() => {
+        programmatic.current = false;
+      }, 450);
+    },
+    [total],
+  );
+
+  const go = useCallback(
+    (delta: number) => scrollToSlide(activeRef.current + delta),
+    [scrollToSlide],
+  );
+
+  /** The track is the source of truth while a finger is on it. */
+  const onTrackScroll = useCallback(() => {
+    const track = trackRef.current;
+    if (programmatic.current || !track || track.clientWidth <= 0) return;
+    const index = Math.round(track.scrollLeft / track.clientWidth);
+    if (index >= 0 && index < total && index !== activeRef.current) {
+      activeRef.current = index;
+      setActive(index);
+    }
+  }, [total]);
+
+  /* Desktop drag-to-pan, and a click that opens the lightbox. */
+  const onPointerDown = (event: React.PointerEvent) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    dragging.current = true;
+    dragged.current = false;
+    dragStartX.current = event.clientX;
+    dragStartScroll.current = trackRef.current?.scrollLeft ?? 0;
+  };
+
+  const onPointerMove = (event: React.PointerEvent) => {
+    const track = trackRef.current;
+    if (!dragging.current || !track) return;
+    const dx = event.clientX - dragStartX.current;
+    if (Math.abs(dx) > 6) {
+      dragged.current = true;
+      if (event.pointerType === "mouse") {
+        track.style.scrollSnapType = "none";
+        track.style.scrollBehavior = "auto";
+        track.scrollLeft = dragStartScroll.current - dx;
+      }
+    }
+  };
+
+  const onPointerUp = (event: React.PointerEvent, type: GalleryItem["type"]) => {
+    const track = trackRef.current;
+    if (!dragging.current) return;
+    dragging.current = false;
+
+    const dx = event.clientX - dragStartX.current;
+
+    if (track && event.pointerType === "mouse") {
+      track.style.scrollSnapType = "x mandatory";
+      track.style.scrollBehavior = "smooth";
+    }
+
+    if (!dragged.current && Math.abs(dx) < 8) {
+      // A tap on the video is for its own controls, not for the lightbox.
+      if (type !== "video") setLightbox(true);
+      return;
+    }
+
+    if (event.pointerType === "mouse" && dragged.current) {
+      if (dx < -40) go(1);
+      else if (dx > 40) go(-1);
+      else scrollToSlide(activeRef.current);
+    }
+  };
+
+  /* Lightbox: keyboard, and no scrolling the page underneath. */
+  useEffect(() => {
+    if (!lightbox) return;
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLightbox(false);
+      else if (event.key === "ArrowLeft") go(-1);
+      else if (event.key === "ArrowRight") go(1);
+    };
+
+    window.addEventListener("keydown", onKey);
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [lightbox, go]);
+
+  const router = useRouter();
+
+  /*
+   * On phones the site header steps aside on a listing so the photos reach
+   * the top of the screen; this is the way back. Back to where they came from
+   * when that was this site, otherwise home.
+   */
+  const goBack = () => {
+    const sameSite =
+      typeof document !== "undefined" && document.referrer.startsWith(window.location.origin);
+    if (sameSite && window.history.length > 1) router.back();
+    else router.push("/");
+  };
+
+  const share = async () => {
+    const url = typeof window !== "undefined" ? window.location.href : "";
+    try {
+      if (navigator.share) await navigator.share({ title, url });
+      else {
+        await navigator.clipboard.writeText(url);
+        toast.success("Link copied");
+      }
+    } catch {
+      // The share sheet was dismissed.
+    }
+  };
+
+  if (total === 0) return null;
+
+  const current = items[active] ?? items[0];
+
+  const tiles = items.filter((i) => i.type === "image").slice(0, 5);
+  const useMosaic = mosaic && tiles.length >= 5;
+
+  return (
+    <>
+      {useMosaic && (
+        <div className="relative hidden h-[clamp(340px,56vh,500px)] grid-cols-4 grid-rows-2 gap-2 md:grid">
+          {tiles.map((t, i) => (
+            <button
+              key={t.url}
+              type="button"
+              onClick={() => { setActive(items.indexOf(t)); setLightbox(true); }}
+              className={`group relative overflow-hidden bg-neutral-200 ${i === 0 ? "col-span-2 row-span-2 rounded-l-[20px]" : ""} ${i === 2 ? "rounded-tr-[20px]" : ""} ${i === 4 ? "rounded-br-[20px]" : ""}`}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={photo(t.url, i === 0 ? 1280 : 640)} alt={t.alt} className="h-full w-full object-cover transition duration-300 group-hover:brightness-90" />
+            </button>
+          ))}
+          <button type="button" onClick={() => { setActive(0); setLightbox(true); }} className="absolute bottom-4 right-4 rounded-xl bg-white px-4 py-2 text-[15px] font-semibold text-ink shadow-md hover:bg-neutral-50">
+            Show all {total} photos
+          </button>
+        </div>
+      )}
+      <div className={`flex flex-col gap-2 md:gap-3 ${useMosaic ? "md:hidden" : ""}`}>
+        {/* The stage. 5:4 on phones; a sane fixed band on desktop. */}
+        <div
+          className={`group relative aspect-[5/4] select-none overflow-hidden bg-neutral-100 md:aspect-auto md:h-[clamp(340px,60vh,580px)] md:rounded-2xl md:border md:border-neutral-200 ${
+            closedLabel ? "[&_img]:grayscale-[0.7] [&_video]:grayscale-[0.7]" : ""
+          }`}
+        >
+          <div
+            ref={trackRef}
+            onScroll={onTrackScroll}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={(event) => onPointerUp(event, current?.type ?? "image")}
+            onPointerCancel={() => {
+              dragging.current = false;
+            }}
+            className="hide-scrollbar absolute inset-0 flex cursor-grab touch-pan-x snap-x scroll-px-4 snap-mandatory overflow-x-auto overflow-y-hidden scroll-smooth select-none active:cursor-grabbing"
+            style={{ WebkitOverflowScrolling: "touch" }}
+          >
+            {items.map((item, index) => (
+              <div
+                key={`${item.type}-${item.url}`}
+                className="relative flex h-full w-full min-w-full flex-shrink-0 snap-center snap-always select-none items-center justify-center overflow-hidden bg-neutral-100"
+              >
+                {item.type === "video" ? (
+                  <>
+                    <video
+                      ref={videoRef}
+                      src={item.url}
+                      poster={item.poster}
+                      controls
+                      loop
+                      muted={muted}
+                      playsInline
+                      preload="metadata"
+                      className="h-full w-full bg-black object-contain"
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                    {/* Sound is off for autoplay; this is how you turn it on. */}
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setMuted((previous) => !previous);
+                      }}
+                      className="absolute right-3 top-16 z-10 grid h-10 w-10 place-items-center rounded-full bg-black/60 text-white backdrop-blur-md transition-transform active:scale-90"
+                      aria-label={muted ? "Turn sound on" : "Mute"}
+                    >
+                      {muted ? (
+                        <VolumeX className="h-4.5 w-4.5" />
+                      ) : (
+                        <Volume2 className="h-4.5 w-4.5" />
+                      )}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {/* A blurred copy fills the letterbox. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={photo(item.url, 96)}
+                      alt=""
+                      aria-hidden
+                      draggable={false}
+                      loading="lazy"
+                      decoding="async"
+                      className="pointer-events-none absolute inset-0 h-full w-full scale-110 object-cover opacity-60 blur-2xl"
+                    />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={photo(item.url, 1080)}
+                      srcSet={photoSrcSet(item.url, [480, 640, 828, 1080, 1280, 1600])}
+                      sizes="(max-width: 1024px) 100vw, 820px"
+                      alt={item.alt}
+                      draggable={false}
+                      loading={index === 0 ? "eager" : "lazy"}
+                      // The first photo is the page's largest element: fetch it before anything else.
+                      fetchPriority={index === 0 ? "high" : "auto"}
+                      decoding={index === 0 ? "sync" : "async"}
+                      className="pointer-events-none relative h-full w-full object-contain"
+                    />
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              goBack();
+            }}
+            className="absolute left-3 top-3 z-10 grid h-10 w-10 place-items-center rounded-full bg-white/95 text-neutral-800 shadow-md transition-transform active:scale-90 md:hidden"
+            aria-label="Back"
+          >
+            <ArrowLeft className="h-5 w-5" strokeWidth={2.5} />
+          </button>
+
+          {(badge || featured) && (
+            <div className="pointer-events-none absolute left-1/2 top-4 z-10 flex -translate-x-1/2 gap-1.5 md:left-3 md:top-3 md:translate-x-0">
+              {badge && (
+                <span className="rounded-md bg-primary px-2.5 py-1 text-[13px] font-semibold text-primary-foreground shadow-sm">
+                  {badge}
+                </span>
+              )}
+              {featured && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-highlight px-3 py-1 text-[13px] font-semibold text-ink shadow-sm">
+                  ★ Featured
+                </span>
+              )}
+            </div>
+          )}
+
+          <div className="absolute right-3 top-3 z-10 flex gap-2">
+            <button
+              type="button"
+              onClick={share}
+              className="grid h-10 w-10 place-items-center rounded-full bg-white/95 text-neutral-800 shadow-md transition-transform hover:bg-white active:scale-90"
+              aria-label="Share this listing"
+            >
+              <Share2 className="h-4.5 w-4.5" />
+            </button>
+          </div>
+
+          {priceTag && (
+            <div className="pointer-events-none absolute bottom-0 left-0 z-10 max-w-[85%]">{priceTag}</div>
+          )}
+
+          {closedLabel && (
+            <div aria-hidden className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
+              <span className="-rotate-12 rounded-lg border-[3px] border-white/90 bg-red-600/85 px-5 py-2 text-xl font-black uppercase tracking-[0.2em] text-white shadow-2xl sm:text-2xl">
+                {closedLabel}
+              </span>
+            </div>
+          )}
+
+          {total > 1 && (
+            <span className="pointer-events-none absolute bottom-3 right-3 z-10 rounded-full bg-black/60 px-2.5 py-1 text-xs font-semibold tabular-nums text-white backdrop-blur-md">
+              {active + 1} / {total}
+            </span>
+          )}
+
+          {total > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  go(-1);
+                }}
+                className="absolute left-3 top-1/2 z-10 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/95 text-neutral-800 opacity-0 shadow-md transition-all hover:bg-white focus-visible:opacity-100 active:scale-95 group-hover:opacity-100 md:grid"
+                aria-label="Previous photo"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  go(1);
+                }}
+                className="absolute right-3 top-1/2 z-10 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/95 text-neutral-800 opacity-0 shadow-md transition-all hover:bg-white focus-visible:opacity-100 active:scale-95 group-hover:opacity-100 md:grid"
+                aria-label="Next photo"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Thumbnails: below the photo, never on top of it. */}
+        {total > 1 && (
+          <div
+            ref={thumbsRef}
+            className="hide-scrollbar flex gap-1.5 overflow-x-auto scroll-smooth px-[var(--gutter)] pb-0.5 md:gap-2 md:px-0"
+          >
+            {items.map((item, index) => {
+              const on = index === active;
+              return (
+                <button
+                  key={`thumb-${item.type}-${item.url}`}
+                  type="button"
+                  onClick={() => scrollToSlide(index)}
+                  aria-current={on}
+                  aria-label={
+                    item.type === "video" ? "Play the walkthrough video" : `View photo ${index + 1}`
+                  }
+                  className={`relative h-14 w-20 shrink-0 overflow-hidden rounded-lg border-2 transition-all md:h-16 ${
+                    on ? "border-ink" : "border-transparent opacity-70 hover:opacity-100"
+                  }`}
+                >
+                  {item.type === "video" ? (
+                    <span className="grid h-full w-full place-items-center bg-neutral-900 text-white">
+                      {item.poster && (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img
+                          src={photo(item.poster, 160)}
+                          alt=""
+                          className="absolute inset-0 h-full w-full object-cover opacity-60"
+                        />
+                      )}
+                      <Play className="relative h-4 w-4 fill-white" />
+                    </span>
+                  ) : (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={photo(item.url, 160)}
+                      alt=""
+                      className="pointer-events-none h-full w-full object-cover"
+                      loading="lazy"
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Fullscreen */}
+      {lightbox && (
+        <div className="fixed inset-0 z-[90] flex select-none flex-col justify-between bg-black/95">
+          <div className="z-10 flex items-center justify-between border-b border-white/10 bg-black/60 px-4 py-3 backdrop-blur-md">
+            <div className="flex items-center gap-2 text-sm font-semibold text-white/90 tabular-nums">
+              <span>{active + 1}</span>
+              <span className="text-white/40">/</span>
+              <span>{total}</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={share}
+                className="grid h-10 w-10 place-items-center rounded-lg bg-white/10 text-white transition-colors hover:bg-white/20"
+                aria-label="Share"
+              >
+                <Share2 className="h-4.5 w-4.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setLightbox(false)}
+                className="grid h-10 w-10 place-items-center rounded-lg bg-white/10 text-white transition-colors hover:bg-white/20"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="relative flex min-h-0 flex-1 items-center justify-center p-3 sm:p-6">
+            {total > 1 && (
+              <button
+                type="button"
+                onClick={() => go(-1)}
+                className="absolute left-4 top-1/2 z-10 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-lg border border-white/15 bg-black/60 text-white transition-all hover:bg-black/90 sm:grid"
+                aria-label="Previous"
+              >
+                <ChevronLeft className="h-6 w-6" />
+              </button>
+            )}
+
+            <div className="relative flex h-full max-h-[82vh] w-full max-w-5xl items-center justify-center">
+              {current?.type === "video" ? (
+                <video
+                  ref={lightboxVideoRef}
+                  key={current.url}
+                  src={current.url}
+                  poster={current.poster}
+                  controls
+                  autoPlay
+                  loop
+                  playsInline
+                  className="max-h-[80vh] w-auto max-w-full rounded-lg bg-black object-contain shadow-2xl"
+                />
+              ) : (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={photo(current?.url, 1600)}
+                  alt={current?.alt}
+                  className="max-h-[82vh] w-auto max-w-full object-contain"
+                />
+              )}
+            </div>
+
+            {total > 1 && (
+              <button
+                type="button"
+                onClick={() => go(1)}
+                className="absolute right-4 top-1/2 z-10 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-lg border border-white/15 bg-black/60 text-white transition-all hover:bg-black/90 sm:grid"
+                aria-label="Next"
+              >
+                <ChevronRight className="h-6 w-6" />
+              </button>
+            )}
+          </div>
+
+          {total > 1 && (
+            <div className="hide-scrollbar flex items-center justify-center gap-2 overflow-x-auto border-t border-white/10 bg-black/70 px-4 py-2.5 backdrop-blur-md">
+              {items.map((item, index) => (
+                <button
+                  key={`lb-${item.type}-${item.url}`}
+                  type="button"
+                  onClick={() => scrollToSlide(index)}
+                  className={`relative h-12 w-12 shrink-0 overflow-hidden rounded-md border-2 transition-all sm:h-14 sm:w-14 ${
+                    index === active
+                      ? "scale-105 border-ink shadow-md"
+                      : "border-white/20 opacity-60 hover:opacity-100"
+                  }`}
+                  aria-label={`Slide ${index + 1}`}
+                >
+                  {item.type === "video" ? (
+                    <span className="grid h-full w-full place-items-center bg-neutral-900 text-white">
+                      <Play className="h-5 w-5 fill-white" />
+                    </span>
+                  ) : (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img src={photo(item.url, 256)} alt="" className="h-full w-full object-cover" loading="lazy" />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}

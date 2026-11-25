@@ -1,0 +1,97 @@
+export interface CreatePackageDto {
+  name: string;
+  description?: string;
+  price: number;
+  duration: number;
+  propertyLimit: number;
+  featuredListings?: number;
+  photosPerProperty?: number;
+  features?: string[];
+  verifiedBadge?: boolean;
+  teamMembers?: number;
+  socialLinks?: boolean;
+  brandedProfile?: boolean;
+  autoPublish?: boolean;
+  spotlight?: boolean;
+  highlight?: boolean;
+  maxRoomTypes?: number;
+  monthlyBookings?: number;
+  showContact?: boolean;
+  advancePayments?: boolean;
+  rateCalendar?: boolean;
+  instantConfirm?: boolean;
+  featuredHotel?: boolean;
+  deals?: boolean;
+  videoTour?: boolean;
+  insights?: string;
+  placement?: number;
+  prioritySupport?: boolean;
+  commissionPercent?: number;
+}
+
+export interface UpdatePackageDto {
+  name?: string;
+  description?: string;
+  price?: number;
+  duration?: number;
+  propertyLimit?: number;
+  featuredListings?: number;
+  photosPerProperty?: number;
+  isActive?: boolean;
+  features?: string[];
+  verifiedBadge?: boolean;
+  teamMembers?: number;
+  socialLinks?: boolean;
+  brandedProfile?: boolean;
+  autoPublish?: boolean;
+  spotlight?: boolean;
+  highlight?: boolean;
+  maxRoomTypes?: number;
+  monthlyBookings?: number;
+  showContact?: boolean;
+  advancePayments?: boolean;
+  rateCalendar?: boolean;
+  instantConfirm?: boolean;
+  featuredHotel?: boolean;
+  deals?: boolean;
+  videoTour?: boolean;
+  insights?: string;
+  placement?: number;
+  prioritySupport?: boolean;
+  commissionPercent?: number;
+}
+
+export interface PackageResponse {
+  _id: string;
+  name: string;
+  description?: string;
+  price: number;
+  duration: number;
+  propertyLimit: number;
+  featuredListings: number;
+  photosPerProperty: number;
+  isActive: boolean;
+  features: string[];
+  verifiedBadge?: boolean;
+  teamMembers?: number;
+  socialLinks?: boolean;
+  brandedProfile?: boolean;
+  autoPublish?: boolean;
+  spotlight?: boolean;
+  highlight?: boolean;
+  maxRoomTypes?: number;
+  monthlyBookings?: number;
+  showContact?: boolean;
+  advancePayments?: boolean;
+  rateCalendar?: boolean;
+  instantConfirm?: boolean;
+  featuredHotel?: boolean;
+  deals?: boolean;
+  videoTour?: boolean;
+  insights?: string;
+  placement?: number;
+  prioritySupport?: boolean;
+  commissionPercent?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}

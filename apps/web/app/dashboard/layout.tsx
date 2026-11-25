@@ -1,0 +1,203 @@
+"use client";
+
+import { Fragment, useEffect, useMemo } from "react";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
+import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
+
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
+import { Separator } from "@/components/ui/separator";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { useAuth } from "@/context/auth-context";
+import DashboardSidebar from "../layout/components/dashboard/sidebar";
+import DashboardMobileTabs from "../layout/components/dashboard/mobile-tabs";
+import { CityPrompt } from "@/components/dashboard/city-prompt";
+import {
+  collectAdminRoutes,
+  SEGMENT_LABELS,
+} from "../layout/components/dashboard/nav-config";
+
+/**
+ * Derived from the nav tree rather than hand-listed, so every admin section
+ * is covered without keeping a second list in step.
+ */
+const ADMIN_ONLY_ROUTES = collectAdminRoutes();
+
+/** MongoDB ObjectId - shown as a shortened id in breadcrumbs. */
+const OBJECT_ID = /^[a-f\d]{24}$/i;
+
+interface Crumb {
+  label: string;
+  href: string;
+  /** False for a path segment that only holds the next one, like "edit". */
+  navigable?: boolean;
+}
+
+function buildCrumbs(pathname: string): Crumb[] {
+  const segments = pathname.split("/").filter(Boolean);
+  const crumbs: Crumb[] = [];
+  let href = "";
+
+  for (const [index, segment] of segments.entries()) {
+    href += `/${segment}`;
+    const label = OBJECT_ID.test(segment)
+      ? `#${segment.slice(-6)}`
+      : (SEGMENT_LABELS[segment] ??
+        segment
+          .replace(/-/g, " ")
+          .replace(/\b\w/g, (char) => char.toUpperCase()));
+
+    /*
+     * Some segments only exist to hold the next one.
+     *
+     * Every crumb used to be a link, including "edit" in
+     * /dashboard/property/edit/<id> — a path that is not a page. Next
+     * prefetches every Link that comes into view, so opening any edit screen
+     * fired a request for a route that does not exist, and the console filled
+     * with a 404 followed by "Unexpected token '<'" — that is the 404's HTML
+     * being parsed as an RSC payload. Clicking the crumb went nowhere either.
+     *
+     * The last crumb is already plain text, so a genuine .../[id]/edit page
+     * is unaffected.
+     */
+    const navigable = !(segment === "edit" && index < segments.length - 1);
+
+    crumbs.push({ label, href, navigable });
+  }
+
+  return crumbs;
+}
+
+export default function DashboardLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { isAuthenticated, isLoading, user } = useAuth();
+
+  const isAdminRoute = useMemo(
+    () =>
+      ADMIN_ONLY_ROUTES.some(
+        (route) => pathname === route || pathname.startsWith(`${route}/`),
+      ),
+    [pathname],
+  );
+
+  const accessDenied = Boolean(user && isAdminRoute && user.role !== "ADMIN");
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    if (!isAuthenticated) {
+      router.push("/login");
+      return;
+    }
+
+    if (!user) return;
+
+    if (user.isActive === false) {
+      router.push("/pending-activation");
+      return;
+    }
+
+    if (isAdminRoute && user.role !== "ADMIN") {
+      toast.error("Access denied", {
+        description: "You do not have permission to open this page.",
+      });
+      router.push("/dashboard");
+    }
+  }, [isLoading, isAuthenticated, user, isAdminRoute, router]);
+
+  if (isLoading) {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-ink" />
+        <span className="sr-only">Loading dashboard</span>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) return null;
+
+  const crumbs = buildCrumbs(pathname);
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <SidebarProvider defaultOpen>
+        <DashboardSidebar />
+
+        <SidebarInset className="flex min-w-0 flex-1 flex-col">
+          <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b border-[color:var(--border)] bg-white px-3 sm:px-4">
+            <SidebarTrigger className="-ml-1 rounded-full" />
+            <Separator orientation="vertical" className="mr-1 h-4" />
+            <Breadcrumb>
+              <BreadcrumbList>
+                {crumbs.map((crumb, index) => {
+                  const isLast = index === crumbs.length - 1;
+                  return (
+                    // The separator is an <li> of its own: inside the item
+                    // it was an <li> in an <li>, a hydration error on every
+                    // dashboard page.
+                    <Fragment key={crumb.href}>
+                      <BreadcrumbItem>
+                        {isLast || crumb.navigable === false ? (
+                          <BreadcrumbPage className="font-medium">
+                            {crumb.label}
+                          </BreadcrumbPage>
+                        ) : (
+                          <BreadcrumbLink
+                            asChild
+                            className="hidden sm:inline-flex"
+                          >
+                            <Link href={crumb.href}>{crumb.label}</Link>
+                          </BreadcrumbLink>
+                        )}
+                      </BreadcrumbItem>
+                      {!isLast && crumb.navigable !== false && (
+                        <BreadcrumbSeparator className="hidden sm:block" />
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </BreadcrumbList>
+            </Breadcrumb>
+          </header>
+
+          <main className="dash-shell min-w-0 flex-1 bg-[#f7f5fc] px-3 pb-6 pt-4 sm:p-6">
+            {/*
+              Render nothing on a route this role cannot open. The guard above
+              redirects in an effect, so without this the restricted page would
+              still mount and fire its admin API calls first.
+            */}
+            {accessDenied ? (
+              <div className="flex h-full items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              children
+            )}
+          </main>
+
+          {/* Phones: the five things an agent does, one tap each. */}
+          <DashboardMobileTabs />
+          <CityPrompt />
+        </SidebarInset>
+      </SidebarProvider>
+    </TooltipProvider>
+  );
+}
