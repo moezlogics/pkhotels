@@ -13,6 +13,9 @@ const BASE_URL = RAW_API_URL.trim().endsWith('/')
 
 console.log('🚀 Server API Base URL:', BASE_URL);
 
+/** One quiet note per build worker when the API is not up, not one per page. */
+let warnedNoApi = false;
+
 /**
  * For endpoints that may not exist yet: while a deploy builds, the old API
  * is still the one answering, and it reads /cities/names or
@@ -54,6 +57,18 @@ export const serverApi = {
 
       return response.json();
     } catch (error: any) {
+      // During "next build" the API may not be running yet (a first deploy, or
+      // building on a PC). Every caller has a fallback and these pages refresh
+      // from the API once it answers, so say it once, quietly, instead of a
+      // stack trace per page.
+      const refused = error?.cause?.code === 'ECONNREFUSED' || /ECONNREFUSED/.test(String(error?.cause ?? ''));
+      if (refused && process.env.NEXT_PHASE === 'phase-production-build') {
+        if (!warnedNoApi) {
+          warnedNoApi = true;
+          console.log(`ℹ API not running at ${BASE_URL} during the build — pages use their built-in text and refresh from the API once it is up.`);
+        }
+        throw error;
+      }
       if (!error.message?.includes('404')) {
         console.error(`💥 Fetch Failed for ${url}. (BaseURL: ${BASE_URL}) Error:`, error.message);
         if (error.cause) console.error('  Cause:', error.cause);

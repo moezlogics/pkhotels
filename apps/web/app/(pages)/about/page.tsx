@@ -2,6 +2,9 @@ import Link from 'next/link';
 import StaticPageView from '@/components/StaticPageView';
 import { getSiteName } from '@/lib/site-settings.server';
 
+// Text edited in Dashboard → Static Pages shows up within 5 minutes (and after a build made while the API was down).
+export const revalidate = 300;
+
 /*
  * About. The text is edited in Dashboard → Static Pages (slug "about"); the
  * copy below is shown only until that page exists, so /about is never empty.

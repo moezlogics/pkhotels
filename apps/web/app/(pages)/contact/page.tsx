@@ -3,6 +3,9 @@ import StaticPageView from '@/components/StaticPageView';
 import { pageMetadata } from '@/lib/seo/page-seo';
 import { getSiteName } from "@/lib/site-settings.server";
 
+// Text edited in Dashboard → Static Pages shows up within 5 minutes (and after a build made while the API was down).
+export const revalidate = 300;
+
 /*
  * /contact — the text is edited in Dashboard → Static Pages (slug "contact"), as
  * are its Meta Title and Meta Description; the values here are the fallback.
