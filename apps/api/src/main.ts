@@ -166,7 +166,8 @@ async function bootstrap() {
   );
 
   const port = process.env.PORT || 3205;
-  await app.listen(port);
+  // HOST=127.0.0.1 on the server: only the website (its /api rewrite) reaches the API.
+  await app.listen(port, process.env.HOST || '0.0.0.0');
 
   console.log(`🚀 API server is running on port: ${port}`);
   console.log(

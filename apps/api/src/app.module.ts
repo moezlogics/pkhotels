@@ -59,6 +59,9 @@ const uploadsPath = isInAppsApi ? path.join(cwd, '..', '..', 'uploads') : path.j
     }),
     ConfigModule.forRoot({
       isGlobal: true,
+      // .env.local = this PC's development values (git-ignored, never on the
+      // server); .env = the live server's values. The first file wins.
+      envFilePath: ['.env.local', '.env'],
     }),
     // 🔒 SECURITY: Global rate limiter — was previously a no-op because
     // ThrottlerModule was never imported even though @Throttle() decorators

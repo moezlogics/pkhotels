@@ -22,6 +22,8 @@ export class IndexNowService {
   }
 
   async submitUrls(urls: string[]): Promise<void> {
+    // Only the live site tells search engines about pages; a PC never does.
+    if (process.env.NODE_ENV !== 'production') return;
     if (!this.key || urls.length === 0) {
       this.logger.warn('IndexNow: Key missing or empty URL list');
       return;

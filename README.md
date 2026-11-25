@@ -64,4 +64,4 @@ redirects to its hotel; `/wp-content/uploads/...` serves the same photos; Yoast 
 - `apps/web/.env.local` — `NEXT_PUBLIC_API_URL=http://localhost:3205`, `NEXT_PUBLIC_BASE_URL=http://localhost:3200`.
 - `apps/web/.env.production` — public production values (`https://pakhotels.pk`).
 
-Production (PM2): `ecosystem.config.js` runs the website on 3217 and the API on 3218 — see DEPLOY.md.
+Production (PM2): `ecosystem.config.js` runs the website on 3119 and the API on 3120 (127.0.0.1 only) — see DEPLOY.md.

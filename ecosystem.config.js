@@ -1,10 +1,11 @@
-// PM2 — PakHotels on the live server (/home/pakhotels/htdocs/pakhotels.pk).
+// PM2 — PakHotels on the live server (/home/pakhotelspk/htdocs/pakhotels.pk).
 //
-//   pm2 start ecosystem.config.js && pm2 save
+//   pm2 start ecosystem.config.js && pm2 save      (deploy/deploy.sh does this)
 //
-// The website listens on 3217 (the port the domain points to); the API on
-// 3218, reached only through the website's /api rewrite. Names are prefixed
-// so they never clash with another site's PM2 processes on the same server.
+// The website listens on 3119 (the port the domain points to in CloudPanel);
+// the API on 3120, bound to 127.0.0.1 and reached only through the website's
+// /api, /uploads and /img rewrites. Names are prefixed so they never clash
+// with another site's PM2 processes on the same server.
 module.exports = {
   apps: [
     {
@@ -18,7 +19,8 @@ module.exports = {
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
-        PORT: 3218,
+        PORT: 3120,
+        HOST: '127.0.0.1',
       },
     },
     {
@@ -26,7 +28,7 @@ module.exports = {
       cwd: './apps/web',
       // next is installed at the workspace root, not inside apps/web.
       script: '../../node_modules/next/dist/bin/next',
-      args: 'start -p 3217',
+      args: 'start -p 3119',
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
@@ -34,7 +36,7 @@ module.exports = {
       max_memory_restart: '1G',
       env: {
         NODE_ENV: 'production',
-        PORT: 3217,
+        PORT: 3119,
       },
     },
   ],

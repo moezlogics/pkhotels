@@ -1,45 +1,41 @@
 /*
  * PakHotels — one-time live setup: creates the MongoDB user and database,
- * loads the exported data, sets the admin login, then deletes itself.
- * Run ON THE SERVER, from the project folder, as root (see DEPLOY.md):
+ * loads the site content that ships with the repository, and creates the
+ * dashboard admin. Run ON THE SERVER, from the project folder (see DEPLOY.md):
  *
- *   node scripts/db/import-live.js --admin-email you@example.com --admin-password 'a-strong-password'
+ *   node scripts/db/import-live.js          (or: npm run db:import)
+ *
+ * Everything it needs is in apps/api/.env:
+ *   MONGODB_URI     mongodb://pakhotels:PASSWORD@127.0.0.1:27017/pakhotels?authSource=pakhotels
+ *   ADMIN_EMAIL     the dashboard login to create
+ *   ADMIN_PASSWORD  its password (removed from the server's .env afterwards)
  *
  * What it does, in order:
- *   1. Reads MONGODB_URI from apps/api/.env
- *      (mongodb://pakhotels:PASSWORD@127.0.0.1:27017/pakhotels?authSource=pakhotels)
- *      and makes sure that MongoDB user exists with that password, with access
- *      to that one database only (readWrite + dbAdmin):
- *        - user already works            → left alone
- *        - MongoDB has no login switched on → user created directly
- *        - MongoDB has a login switched on and you don't have the admin
- *          password → authentication is switched OFF in /etc/mongod.conf,
- *          MongoDB restarted, the user created, then authentication switched
- *          back ON exactly as it was and MongoDB restarted again (a few
- *          seconds each). This part needs root. If you do know an admin login
- *          you can pass it instead:
+ *   1. Makes sure the MongoDB user in MONGODB_URI exists with that password,
+ *      with access to that one database only (readWrite + dbAdmin):
+ *        - user already works               -> left alone
+ *        - MongoDB has no login switched on  -> user created directly
+ *        - MongoDB asks for a login and no admin login is given -> (as root)
+ *          authentication is switched OFF in /etc/mongod.conf, MongoDB
+ *          restarted, the user created, then switched back ON exactly as it
+ *          was. Or pass an admin login:
  *            --admin-uri 'mongodb://ADMIN:PASS@127.0.0.1:27017/?authSource=admin'
- *   2. Creates the database and loads deploy/pakhotels-db.json.gz (made on
- *      your PC by scripts/db/export-local.js): cities, areas, listings, media
- *      library, settings, plans. Copied listings arrive as drafts.
- *   3. Sets the dashboard admin login from --admin-email / --admin-password
- *      (the local test password never reaches the live site).
- *   4. Locks apps/api/.env and apps/web/.env to their owner (chmod 600), then
- *      deletes the data file and this script, so neither the full data
- *      export nor a re-runnable import is left on the server. Pass --keep
- *      to leave both in place.
+ *   2. Creates the database and loads deploy/seed/pakhotels-seed.json.gz
+ *      (hotels, rooms, cities, areas, plans, boost prices, settings...). The
+ *      seed has no accounts or bookings — the live site starts those empty.
+ *   3. Creates the admin from ADMIN_EMAIL / ADMIN_PASSWORD (or
+ *      --admin-email / --admin-password), then blanks ADMIN_PASSWORD in the
+ *      server's apps/api/.env so the password is not left in a file.
+ *   4. Locks apps/api/.env and apps/web/.env to their owner (chmod 600).
  *
  * Safety:
- *   - Refuses to touch a database that already has listings or users, unless
- *     you pass --replace (which drops the collections it is about to load).
+ *   - Refuses to touch a database that already has hotels or accounts, unless
+ *     you pass --replace (drops and reloads the content collections; accounts
+ *     and bookings are never touched).
  *   - --dry-run shows what would happen and changes nothing.
- *   - If anything fails while authentication is off, it is still switched
- *     back on (the original config is restored before the script exits).
- *   - Advanced: --mongod-conf <path> (default /etc/mongod.conf) and
- *     --restart-cmd '<command>' (default: systemctl restart mongod).
+ *   - Advanced: --file <seed>, --mongod-conf <path>, --restart-cmd '<command>'.
  *
- * Photos are not in this file: upload the uploads/ folder to
- * <project>/uploads (the API serves it at /uploads/...).
+ * Photos are not in the seed: upload the uploads/ folder to <project>/uploads.
  */
 const fs = require('fs');
 const path = require('path');
@@ -58,11 +54,26 @@ const opt = (name) => {
 const DRY = flag('dry-run');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function readEnvUri() {
-  if (process.env.MONGODB_URI) return process.env.MONGODB_URI;
-  const file = path.join(ROOT, 'apps', 'api', '.env');
-  const line = fs.existsSync(file) && fs.readFileSync(file, 'utf8').split(/\r?\n/).find((l) => l.startsWith('MONGODB_URI='));
-  return line ? line.slice('MONGODB_URI='.length).trim() : '';
+const ENV_FILE = path.join(ROOT, 'apps', 'api', '.env');
+
+/** One value from apps/api/.env (the live file), or the process environment. */
+function readEnv(key) {
+  if (process.env[key]) return process.env[key];
+  if (!fs.existsSync(ENV_FILE)) return '';
+  const line = fs.readFileSync(ENV_FILE, 'utf8').split(/\r?\n/).find((l) => l.startsWith(`${key}=`));
+  return line ? line.slice(key.length + 1).trim().replace(/^["']|["']$/g, '') : '';
+}
+const readEnvUri = () => readEnv('MONGODB_URI');
+
+/** The admin password should not stay in a file once the account exists. */
+function blankAdminPassword() {
+  if (!fs.existsSync(ENV_FILE)) return;
+  const text = fs.readFileSync(ENV_FILE, 'utf8');
+  const next = text.replace(/^ADMIN_PASSWORD=.*$/m, 'ADMIN_PASSWORD=');
+  if (next !== text) {
+    fs.writeFileSync(ENV_FILE, next);
+    console.log('Removed ADMIN_PASSWORD from apps/api/.env (the account exists now; keep the password safe yourself).');
+  }
 }
 
 const isAuthError = (e) => e && (e.code === 18 || /Authentication failed|auth.*fail/i.test(e.message || ''));
@@ -236,10 +247,10 @@ function lockEnvFiles() {
 
 (async () => {
   // Check everything first, so a mistake stops the script before it changes anything.
-  const file = path.resolve(ROOT, opt('file') || 'deploy/pakhotels-db.json.gz');
+  const file = path.resolve(ROOT, opt('file') || 'deploy/seed/pakhotels-seed.json.gz');
   const uri = readEnvUri();
   if (!uri) {
-    console.error('MONGODB_URI is not set. Upload the live .env to apps/api/.env first.');
+    console.error('MONGODB_URI is not set. Copy the live .env to apps/api/.env first.');
     process.exit(1);
   }
   if (/CHANGE_ME/i.test(uri)) {
@@ -248,13 +259,13 @@ function lockEnvFiles() {
     process.exit(1);
   }
   if (!fs.existsSync(file)) {
-    console.error(`Not found: ${file}\nUpload deploy/pakhotels-db.json.gz from your PC first.`);
+    console.error(`Not found: ${file}\nIt ships with the repository: run git pull.`);
     process.exit(1);
   }
-  const adminEmail = (opt('admin-email') || '').trim().toLowerCase();
-  const adminPassword = opt('admin-password') || '';
+  const adminEmail = (opt('admin-email') || readEnv('ADMIN_EMAIL')).trim().toLowerCase();
+  const adminPassword = opt('admin-password') || readEnv('ADMIN_PASSWORD');
   if (!DRY && (!adminEmail || adminPassword.length < 10)) {
-    console.error('Pass --admin-email and --admin-password (at least 10 characters) for the live dashboard login.');
+    console.error('Set ADMIN_EMAIL and ADMIN_PASSWORD (10+ characters) in apps/api/.env, or pass --admin-email / --admin-password.');
     process.exit(1);
   }
   let dbName;
@@ -285,11 +296,11 @@ function lockEnvFiles() {
   const db = client.db(dbName);
   const existing = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name));
   const busy = [];
-  for (const n of ['properties', 'users']) {
+  for (const n of ['hotels', 'users']) {
     if (existing.has(n) && (await db.collection(n).estimatedDocumentCount()) > 0) busy.push(n);
   }
   if (busy.length && !flag('replace') && !DRY) {
-    console.error(`The live database already has data in: ${busy.join(', ')}.\nRun again with --replace to overwrite it (the collections in the dump are dropped first).`);
+    console.error(`The live database already has data in: ${busy.join(', ')}.\nRun again with --replace to reload the content (hotels, rooms, cities...). Accounts and bookings are never touched.`);
     await client.close();
     process.exit(1);
   }
@@ -318,30 +329,18 @@ function lockEnvFiles() {
     } else {
       await users.insertOne({ email: adminEmail, name: 'Admin', password: hash, role: 'ADMIN', isActive: true, provider: 'credentials', createdAt: now, updatedAt: now });
     }
-    const drafts = await db.collection('properties').countDocuments({ status: 'draft' });
-    const live = await db.collection('properties').countDocuments({ status: 'approved' });
-    console.log(`\nDatabase "${dbName}" ready.`);
+    const live = await db.collection('hotels').countDocuments({ status: 'approved' });
+    const rooms = await db.collection('rooms').estimatedDocumentCount();
+    console.log(`\nDatabase "${dbName}" ready: ${live} live hotels, ${rooms} room types.`);
     console.log(`Admin login: ${adminEmail}`);
-    console.log(`Listings: ${live} live, ${drafts} drafts (Dashboard → Properties → Draft to review and publish).`);
   }
   await client.close();
 
-  // 4. Clean up: lock the secrets, remove the data file and this script, so
-  // the import cannot be run again by accident and the full data export is
-  // not left lying on the server.
+  // 4. Clean up: the admin password out of the file, the secrets locked.
   if (!DRY) {
+    if (!opt('admin-password')) blankAdminPassword();
     lockEnvFiles();
-    if (!flag('keep')) {
-      for (const f of [file, __filename]) {
-        try {
-          fs.unlinkSync(f);
-          console.log(`Deleted ${path.relative(ROOT, f)}`);
-        } catch (e) {
-          console.warn(`Could not delete ${path.relative(ROOT, f)}: ${e.message}`);
-        }
-      }
-    }
-    console.log('\nNext (as the site user):  pm2 start ecosystem.config.js && pm2 save');
+    console.log('\nNext, as the site user:  bash deploy/deploy.sh');
   }
 })().catch((e) => {
   console.error(e.message || e);

@@ -87,9 +87,12 @@ api@*
 /private-uploads/
 
 
-# Live server secrets and the database export — never committed
+# Live server secrets and full database exports — never committed.
+# (deploy/seed/pakhotels-seed.json.gz IS committed: site content only, no accounts.)
 /deploy/live-env/
 /deploy/*.json.gz
+# IndexNow key file, written by deploy/deploy.sh from apps/web/.env
+/apps/web/public/[0-9a-f]*.txt
 
 # WordPress export (re-made with: python scripts/wp-dump.py data/wp-export)
 data/wp-export/

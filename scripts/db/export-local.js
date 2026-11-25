@@ -1,77 +1,85 @@
 /*
- * PakHotels — export the LOCAL database into one file for the live server.
+ * PakHotels — export the site's CONTENT from the local database into the
+ * seed file that ships with the repository:
  *
- *   node scripts/db/export-local.js
+ *   npm run db:export        → deploy/seed/pakhotels-seed.json.gz  (commit it)
  *
- * Reads MONGODB_URI from apps/api/.env (must be a database on this machine)
- * and writes deploy/pakhotels-db.json.gz: every collection as Extended JSON,
- * so ObjectIds and dates survive exactly. Upload that file to the server
- * (same path) together with the uploads/ folder, then run
- * scripts/db/import-live.js there.
+ * On the server, scripts/db/import-live.js creates the MongoDB database and
+ * user and loads this file — so a fresh clone is all the server needs.
  *
- * What changes on the way:
- *   - Listings copied from other portals (source = olx.com.pk, zameen.com …)
- *     are exported as DRAFTS, so nothing goes public until someone opens it
- *     in Dashboard → Properties and publishes it.
- *   - Browser-push data (subscribers, jobs, stats, the VAPID keys) is left
- *     out: the live site makes its own keys on first start.
+ * What goes in: hotels, rooms, prices calendar, cities, areas, plans, boost
+ * prices, payment accounts, static pages, blog, media library, site settings,
+ * and the setup-migration markers.
  *
- * The output file is git-ignored — it holds every account and listing, so it
- * never goes into the repository.
+ * What never goes in (it would publish people's data in the repository, and
+ * the live site starts these empty): accounts, bookings, invoices,
+ * subscriptions, reviews, hotel claims and browser-push data. Hotels go out
+ * unclaimed and with their test counters (views, bookings, ratings) reset.
+ *
+ * Reads MONGODB_URI from apps/api/.env.local (this PC), never the live .env.
  */
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
-const { MongoClient, BSON } = require('mongodb');
+const { MongoClient, BSON } = require(require.resolve('mongodb', { paths: [path.join(__dirname, '..', '..', 'apps', 'api'), __dirname] }));
 
 const ROOT = path.join(__dirname, '..', '..');
-const OUT = path.join(ROOT, 'deploy', 'pakhotels-db.json.gz');
+const OUT = path.join(ROOT, 'deploy', 'seed', 'pakhotels-seed.json.gz');
 
-/** Not copied: device subscriptions and push bookkeeping are per-site. */
-const SKIP = new Set(['pushsubscribers', 'pushjobs', 'pushstats', 'pushsettings', 'pushcampaigns']);
-/** Listings from these sources go live as drafts. */
-const IMPORTED_SOURCES = /olx|zameen|graana|lamudi|scrap|import/i;
+/** Content collections, in load order. Anything else stays on this PC. */
+const INCLUDE = [
+  'cities', 'areas', 'hotels', 'rooms', 'roomrates', 'packages', 'boost_plans', 'paymentmethods',
+  'pages', 'blogs', 'categories', 'media', 'site_settings', 'datamigrations',
+];
 
 function readEnvUri() {
   if (process.env.MONGODB_URI) return process.env.MONGODB_URI;
-  const file = path.join(ROOT, 'apps', 'api', '.env');
-  const line = fs.existsSync(file) && fs.readFileSync(file, 'utf8').split(/\r?\n/).find((l) => l.startsWith('MONGODB_URI='));
-  return line ? line.slice('MONGODB_URI='.length).trim() : '';
+  for (const name of ['.env.local', '.env']) {
+    const file = path.join(ROOT, 'apps', 'api', name);
+    if (!fs.existsSync(file)) continue;
+    const line = fs.readFileSync(file, 'utf8').split(/\r?\n/).find((l) => l.startsWith('MONGODB_URI='));
+    if (line) return line.slice('MONGODB_URI='.length).trim();
+  }
+  return '';
 }
 
 (async () => {
   const uri = readEnvUri();
   if (!/^mongodb:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/[\w-]+$/.test(uri)) {
-    console.error(`Refusing: expected a local MONGODB_URI (mongodb://localhost:27017/<db>), got "${uri || '(empty)'}".`);
+    console.error(`Refusing: expected a local MONGODB_URI (mongodb://localhost:27017/<db>), got "${uri ? uri.replace(/\/\/[^@]*@/, '//***@') : '(empty)'}".`);
     process.exit(1);
   }
   const client = await MongoClient.connect(uri);
   const db = client.db();
+  const have = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map((c) => c.name));
   const dump = { exportedAt: new Date().toISOString(), database: db.databaseName, collections: {} };
-  let drafted = 0;
 
-  for (const { name } of await db.listCollections({}, { nameOnly: true }).toArray()) {
-    if (SKIP.has(name) || name.startsWith('system.')) continue;
+  for (const name of INCLUDE) {
+    if (!have.has(name)) continue;
     const docs = await db.collection(name).find({}).toArray();
-    if (name === 'properties') {
-      for (const d of docs) {
-        if (d.source && IMPORTED_SOURCES.test(String(d.source)) && d.status !== 'draft') {
-          d.status = 'draft';
-          d.autoPublished = false;
-          drafted++;
-        }
+    if (name === 'hotels') {
+      for (const h of docs) {
+        // Accounts are not exported, so no hotel may point at one.
+        delete h.owner;
+        delete h.boostTopUntil;
+        delete h.boostFeaturedUntil;
+        h.billingHold = false;
+        h.views = 0;
+        h.bookingsCount = 0;
+        h.ratingAvg = 0;
+        h.ratingCount = 0;
+        h.rank = 0;
+        if (h.perks) h.perks = { ...h.perks, plan: 'Unclaimed', boostTop: false, boostFeatured: false, commissionPercent: 0 };
       }
     }
     dump.collections[name] = docs;
-    console.log(`${name.padEnd(20)} ${docs.length}`);
+    console.log(`${name.padEnd(18)} ${docs.length}`);
   }
 
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
-  const json = BSON.EJSON.stringify(dump, { relaxed: false });
-  fs.writeFileSync(OUT, zlib.gzipSync(json, { level: 9 }));
+  fs.writeFileSync(OUT, zlib.gzipSync(BSON.EJSON.stringify(dump, { relaxed: false }), { level: 9 }));
   await client.close();
-  console.log(`\nImported-portal listings set to draft: ${drafted}`);
-  console.log(`Wrote ${path.relative(ROOT, OUT)} (${(fs.statSync(OUT).size / 1024 / 1024).toFixed(1)} MB)`);
+  console.log(`\nWrote ${path.relative(ROOT, OUT)} (${(fs.statSync(OUT).size / 1024).toFixed(0)} KB). Commit it, then git push.`);
 })().catch((e) => {
   console.error(e);
   process.exit(1);

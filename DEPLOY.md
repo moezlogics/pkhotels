@@ -1,97 +1,167 @@
-# Deploying PakHotels to the live server
+# PakHotels — live server par deploy
 
-> **Switching from WordPress:** the new site keeps every ranked address (see README → "URLs kept
-> from WordPress"). Before pointing the domain here: run `npm run export:wp` and `npm run import:wp`
-> locally one last time, then `npm run db:export`, and upload `uploads/wp/` with the rest of `uploads/`.
-> After the switch, submit `https://pakhotels.pk/sitemap.xml` in Search Console (the old Yoast sitemap
-> names keep working too).
-
-Server folder: `/home/pakhotels/htdocs/pakhotels.pk` · website port **3217** · API port **3218** (internal only) · MongoDB database **pakhotels**, user **pakhotels**.
-
-## What you upload yourself (not in git)
-
-Create `deploy/live-env/apps/api/.env` and `deploy/live-env/apps/web/.env` from the `.env.example` files with **fresh** secrets (never reuse rentghar's), then upload them to the same place inside the site folder.
-
-| On your PC (`C:\Users\xomoe\PakHotels\…`) | On the server (`/home/pakhotels/htdocs/pakhotels.pk/…`) |
+| Cheez | Value |
 | --- | --- |
-| `deploy/live-env/apps/api/.env` | `apps/api/.env` |
-| `deploy/live-env/apps/web/.env` | `apps/web/.env` |
-| `deploy/pakhotels-db.json.gz` | `deploy/pakhotels-db.json.gz` |
-| `uploads/` (whole folder) | `uploads/` |
+| Domain | `pakhotels.pk` |
+| Folder | `/home/pakhotelspk/htdocs/pakhotels.pk` |
+| Site user | `pakhotelspk` |
+| Website port | **3119** (CloudPanel isi par domain bhejta hai) |
+| API port | **3120** (sirf `127.0.0.1` par — bahar se band; website `/api`, `/uploads`, `/img` khud aage bhejti hai) |
+| Database | MongoDB `pakhotels`, user `pakhotels` (script khud banata hai) |
 
-`apps/web/.env.production` (the public site URL) is already in git.
+## Aap ke PC se server par kya jayega
 
-If you changed anything locally since the last export, make a fresh one before you upload:
+| PC (`C:\Users\xomoe\propertydealer\pakhotels.pk\…`) | Server (`/home/pakhotelspk/htdocs/pakhotels.pk/…`) | Kaise |
+| --- | --- | --- |
+| poora code | same folder | `git clone` / `git pull` |
+| `deploy/seed/pakhotels-seed.json.gz` (hotels, rooms, cities, plans…) | same | git ke saath khud aata hai |
+| `apps/api/.env` | `apps/api/.env` | **khud copy karein** (git mein nahi) |
+| `apps/web/.env` | `apps/web/.env` | **khud copy karein** (git mein nahi) |
+| `uploads/` (photos) | `uploads/` | **khud upload karein** |
+
+`.env` files mein asli, naye secrets hain: database password, JWT keys, admin login. Inhe kisi ko na bhejein aur git mein na daalein (`.gitignore` pehle se rokta hai). Database password wahi hai jo setup script MongoDB mein banata hai — `MONGODB_URI` se parhta hai, alag se kahin type nahi karna.
+
+**Dashboard login:** `apps/api/.env` mein `ADMIN_EMAIL` aur `ADMIN_PASSWORD`. Pehli dafa login ke liye yeh password apne PC wali file se dekh lein (server par setup ke baad yeh file se mita diya jata hai). Login ke baad Dashboard → Account se password badal sakte hain.
+
+---
+
+## Pehli dafa (ek hi baar)
+
+### 1. Server par zaroori cheezein (root se, ek dafa)
+
+**MongoDB** (agar pehle se nahi hai — check: `systemctl status mongod`):
 
 ```bash
-npm run db:export
+# Ubuntu 22.04/24.04 — MongoDB 7
+curl -fsSL https://www.mongodb.org/static/pgp/server-7.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg
+echo "deb [ signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -cs)/mongodb-org/7.0 multiverse" > /etc/apt/sources.list.d/mongodb-org-7.0.list
+apt update && apt install -y mongodb-org
+systemctl enable --now mongod
 ```
 
-## First deploy
+### 2. CloudPanel mein site
 
-**Before anything:** open `apps/api/.env` and replace `CHANGE_ME_DB_PASSWORD` with a password of your own — letters and numbers only. To make one: `openssl rand -hex 16`. You never type this password anywhere else; the import script creates the MongoDB user with it.
+1. **Add Site → Create a Node.js Site**
+   - Domain: `pakhotels.pk`
+   - Node.js version: **22**
+   - App Port: **3119**
+   - Site user: `pakhotelspk`
+2. **SSL/TLS → Actions → New Let's Encrypt Certificate** (`pakhotels.pk` aur `www.pakhotels.pk`).
+   Cloudflare use kar rahe hain to SSL mode **Full (strict)** rakhein.
 
-As the **site user** (`pakhotels`):
+Koi extra Nginx rule nahi chahiye — `/api`, `/uploads`, `/img` website khud API (3120) ko bhejti hai.
+
+### 3. Code, `.env` aur photos (site user se)
 
 ```bash
-cd /home/pakhotels/htdocs/pakhotels.pk
-git clone <your-pakhotels-repo-url> .     # first time; later just: git pull
-# upload the four items in the table above, then:
+ssh pakhotelspk@SERVER_IP
+cd /home/pakhotelspk/htdocs/pakhotels.pk
+# CloudPanel ka folder khali na ho to bhi chalega: pehle alag jagah clone, phir yahan copy.
+git clone https://github.com/moezlogics/pkhotels.git /tmp/pkhotels
+cp -a /tmp/pkhotels/. . && rm -rf /tmp/pkhotels
+```
+
+Ab apne PC se teen cheezein upload karein (FileZilla / CloudPanel File Manager / `scp`):
+
+- `apps/api/.env` → `/home/pakhotelspk/htdocs/pakhotels.pk/apps/api/.env`
+- `apps/web/.env` → `/home/pakhotelspk/htdocs/pakhotels.pk/apps/web/.env`
+- `uploads/` (poora folder) → `/home/pakhotelspk/htdocs/pakhotels.pk/uploads/`
+
+`scp` se (PC ke PowerShell mein, project folder se):
+
+```powershell
+scp apps/api/.env pakhotelspk@SERVER_IP:/home/pakhotelspk/htdocs/pakhotels.pk/apps/api/.env
+scp apps/web/.env pakhotelspk@SERVER_IP:/home/pakhotelspk/htdocs/pakhotels.pk/apps/web/.env
+```
+
+### 4. Packages aur database (ek command)
+
+```bash
+cd /home/pakhotelspk/htdocs/pakhotels.pk
 npm ci
-NODE_OPTIONS=--max-old-space-size=6144 npm run build
-which node                                                # note this path, e.g. /home/pakhotels/.nvm/versions/node/v22.x.x/bin/node
+npm run db:import
 ```
 
-As **root** (it may switch MongoDB authentication off and on, which needs root):
+`db:import` khud:
+
+1. MongoDB mein user **`pakhotels`** banata hai, `.env` wale password ke saath, sirf `pakhotels` database ki ijazat ke saath.
+2. Database **`pakhotels`** banata hai aur saara content daalta hai: 166 hotels, 511 room types, 18 cities, 86 areas, 3 plans, boost prices.
+3. Dashboard admin banata hai (`ADMIN_EMAIL` / `ADMIN_PASSWORD`), phir server ki `.env` se password mita deta hai.
+4. Dono `.env` files ko lock kar deta hai (sirf owner parh sakta hai).
+
+Agar MongoDB par pehle se password laga hai ("requires authentication" aaye), to yeh command **root** se chalayein — script thori der ke liye auth band karke user banata hai aur phir bilkul pehle jaisa chalu kar deta hai:
 
 ```bash
-cd /home/pakhotels/htdocs/pakhotels.pk
-/home/pakhotels/.nvm/versions/node/v22.x.x/bin/node scripts/db/import-live.js --admin-email you@example.com --admin-password 'choose-a-strong-password'
+sudo env "PATH=$PATH" npm run db:import
 ```
 
-(Use the path `which node` printed. If the site user has sudo, `sudo env "PATH=$PATH" node scripts/db/import-live.js …` does the same.)
+(Ya admin login maloom ho to: `npm run db:import -- --admin-uri 'mongodb://ADMIN:PASS@127.0.0.1:27017/?authSource=admin'`.)
 
-Back as the **site user**:
+Pehle dekhna ho ke kya karega, kuch badle baghair: `npm run db:import -- --dry-run`.
+
+### 5. Build aur start
 
 ```bash
-pm2 start ecosystem.config.js
+bash deploy/deploy.sh
+```
+
+Yeh packages install karta hai, build karta hai (kuch minute), PM2 se dono chalu karta hai (`pakhotels-api` 3120, `pakhotels-web` 3119), aur aakhir mein check karke batata hai. Pehli dafa website ek baar dobara build hoti hai taake pages asli data se banen.
+
+Server reboot ke baad bhi chalta rahe — ek dafa:
+
+```bash
+pm2 startup        # jo command yeh print kare, woh root se chala dein
 pm2 save
-pm2 startup        # once: run the command it prints, so PM2 starts after a reboot
 ```
 
-1. **Build** needs `apps/web/.env` in place first (the website reads the API address at build time).
-2. **`import-live.js`** does the whole database setup in one go:
-   - **MongoDB user** `pakhotels` with the password from `MONGODB_URI`, access to the `pakhotels` database only. If MongoDB asks for a login and you don't know the admin password, the script switches authentication **off** in `/etc/mongod.conf`, restarts MongoDB, creates the user, switches authentication back **on** exactly as it was and restarts again (a few seconds each; other sites on the same MongoDB blink for those seconds). Even if something fails in between, the original config is put back. If you do know an admin login you can give it instead: `--admin-uri 'mongodb://ADMIN:PASS@127.0.0.1:27017/?authSource=admin'`.
-   - **Database** `pakhotels` with everything (cities, areas, listings, media library, settings, plans). Listings copied from other portals arrive as **drafts**: open *Dashboard → Properties → Draft*, check each one, and publish it.
-   - **Dashboard login** from `--admin-email` / `--admin-password` (the local test password is never used on the live site).
-   - **Clean-up:** locks `apps/api/.env` and `apps/web/.env` so only their owner can read them, then **deletes itself and `deploy/pakhotels-db.json.gz`** (add `--keep` to keep them).
+Ab https://pakhotels.pk kholein. Login: https://pakhotels.pk/login
 
-   `--dry-run` shows what it would do without changing anything. Run once more by mistake, it refuses (the database already has data). After it has run, `git status` shows `scripts/db/import-live.js` as deleted — expected; `git checkout -- scripts/db/import-live.js` brings it back if you ever need it.
-   Afterwards: `history -c` clears the admin password from the terminal history.
-3. **CloudPanel:** the site must be a Node.js site with app port **3217**. `/api`, `/uploads` and `/img` are forwarded to the API by the website itself — no extra proxy rules.
+### 6. Live hone ke baad (dashboard se)
 
-## Updating later
+- **Payment Methods:** apne bank / JazzCash / Easypaisa accounts daalein — boost aur commission invoices par yahi dikhte hain.
+- **Billing → Terms:** due days, WhatsApp number.
+- **Settings → General:** phone, WhatsApp, email, social links, Google Search Console verification.
+- Search Console mein `https://pakhotels.pk/sitemap.xml` submit karein.
+
+---
+
+## Har update par
+
+PC par code badla, commit + push kiya, phir server par:
 
 ```bash
-cd /home/pakhotels/htdocs/pakhotels.pk
-git pull
-npm ci
-NODE_OPTIONS=--max-old-space-size=6144 npm run build
-pm2 restart pakhotels-api pakhotels-web
+cd /home/pakhotelspk/htdocs/pakhotels.pk
+bash deploy/deploy.sh
 ```
 
-Do **not** run the import again on a live site with real data: it refuses unless you add `--replace`, which overwrites the live listings and accounts with the file.
+(`git pull`, install, build aur PM2 reload sab yahi karta hai.)
 
-## Checks
+**Database ko dobara import na karein** — live bookings aur accounts wahan hain. Script waise bhi mana kar deta hai. Sirf content (hotels/rooms) dobara laana ho to `npm run db:import -- --replace` (accounts aur bookings ko haath nahi lagata).
+
+PC par hotels ka content badal kar naya seed banana ho: `npm run db:export` → commit → push.
+
+---
+
+## Mushkil ho to
 
 ```bash
-curl -s http://127.0.0.1:3218/api/cities | head -c 200          # API answers
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3217/   # website: 200
-pm2 logs pakhotels-api --lines 30
+pm2 status
+pm2 logs pakhotels-api --lines 50
+pm2 logs pakhotels-web --lines 50
+curl -s http://127.0.0.1:3120/api/hotels/cities | head -c 200     # API
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3119/   # website: 200
 ```
 
-## Optional, later
+| Masla | Hal |
+| --- | --- |
+| `Authentication failed` (API logs) | `apps/api/.env` ka `MONGODB_URI` badla gaya? `npm run db:import` dobara chalayein — password ko `.env` ke mutabiq kar dega. |
+| Photos nahi dikhti | `uploads/` folder `/home/pakhotelspk/htdocs/pakhotels.pk/uploads` mein hai? |
+| 502 Bad Gateway | `pm2 status` — `pakhotels-web` chal raha hai? CloudPanel mein App Port 3119 hai? |
+| Build "out of memory" | Server par kam se kam 4 GB RAM / swap chahiye. |
 
-- **Lock MongoDB with a password** (recommended once everything runs): add `security:\n  authorization: enabled` to `/etc/mongod.conf`, then `sudo systemctl restart mongod`. The `pakhotels` user already exists, so the site keeps working. Create a MongoDB admin user for yourself before you switch it on, or you will have no admin login afterwards.
-- **Google sign-in:** create an OAuth client for `https://pakhotels.pk` with callback `https://pakhotels.pk/api/auth/google/callback`, put the ID and secret in `apps/api/.env`, then `pm2 restart pakhotels-api`.
-- **AI chat / AI image features:** add your OpenAI key (`OPENAI_API_KEY` in apps/api/.env, `AI_ASSISTANT_API_KEY` in apps/web/.env); the web one needs a rebuild.
+## Baad mein (optional)
+
+- **Google sign-in:** Google Cloud mein OAuth client (`https://pakhotels.pk`, callback `https://pakhotels.pk/api/auth/google/callback`), ID aur secret `apps/api/.env` mein, phir `pm2 restart pakhotels-api`.
+- **Discord alerts** (nayi booking/payment): channel webhook URL `DISCORD_WEBHOOK_URL` mein.
+- **Redis cache:** Redis install ho to `REDIS_ENABLED=true`.
+- **MongoDB par password lock:** `/etc/mongod.conf` mein `security:\n  authorization: enabled`, phir `systemctl restart mongod`. `pakhotels` user pehle se hai, site chalti rahegi. Pehle apna MongoDB admin user bana lein.

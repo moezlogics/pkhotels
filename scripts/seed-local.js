@@ -20,7 +20,8 @@ const bcrypt = require('bcrypt');
 
 function readEnvUri() {
   if (process.env.MONGODB_URI) return process.env.MONGODB_URI;
-  const file = path.join(__dirname, '..', 'apps', 'api', '.env');
+  // Local development values live in .env.local; .env holds the live server's.
+  const file = [path.join(__dirname, '..', 'apps', 'api', '.env').replace(/\.env$/, '.env.local'), path.join(__dirname, '..', 'apps', 'api', '.env')].find((f) => fs.existsSync(f));
   const line = fs.existsSync(file) && fs.readFileSync(file, 'utf8').split(/\r?\n/).find((l) => l.startsWith('MONGODB_URI='));
   return line ? line.slice('MONGODB_URI='.length).trim() : '';
 }

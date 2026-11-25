@@ -108,8 +108,8 @@ const nextConfig: NextConfig = {
     }
     
     if (!baseUrl) {
-      // Fallback: PM2 runs the PakHotels API on 3218 in production, dev runs on 3205
-      baseUrl = process.env.NODE_ENV === 'production' ? 'http://127.0.0.1:3218' : 'http://localhost:3205';
+      // Fallback: PM2 runs the PakHotels API on 3120 in production, dev runs on 3205
+      baseUrl = process.env.NODE_ENV === 'production' ? 'http://127.0.0.1:3120' : 'http://localhost:3205';
     }
 
     console.log(`📡 Rewriting /api and /uploads to: ${baseUrl}`);
