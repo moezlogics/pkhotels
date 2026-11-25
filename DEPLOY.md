@@ -105,7 +105,9 @@ Pehle dekhna ho ke kya karega, kuch badle baghair: `npm run db:import -- --dry-r
 bash deploy/deploy.sh
 ```
 
-Yeh packages install karta hai, build karta hai (kuch minute), PM2 se dono chalu karta hai (`pakhotels-api` 3120, `pakhotels-web` 3119), aur aakhir mein check karke batata hai. Pehli dafa website ek baar dobara build hoti hai taake pages asli data se banen.
+Yeh packages install karta hai, phir **pehle API** build karke chalu karta hai (`pakhotels-api`, 3120), us ke jawab dene ka intezar karta hai, phir **website** build karke chalu karta hai (`pakhotels-web`, 3119) — is tarah website ke pages build ke waqt hi asli data se bante hain. Aakhir mein check karke batata hai.
+
+> Build ke dauran `Fetch Failed … ECONNREFUSED 127.0.0.1:3120` dikhe to iska matlab hai API us waqt chal nahi rahi thi (jaise `npm run build` khud chalane par). Yeh error build nahi rokta; `bash deploy/deploy.sh` se chalayein to aayega hi nahi.
 
 Server reboot ke baad bhi chalta rahe — ek dafa:
 

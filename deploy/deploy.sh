@@ -35,36 +35,48 @@ if [ -n "$KEY" ]; then
   printf '%s' "$KEY" > "apps/web/public/${KEY}.txt"
 fi
 
-say "Building (a few minutes)"
-NODE_OPTIONS=--max-old-space-size=6144 npm run build
+# The API goes first: the website's build reads pages (about, contact, blog…)
+# from it, so it must already be answering on 3120 when the website builds.
+# Both builds still run through turbo from the root (shared packages first).
+export NODE_OPTIONS=--max-old-space-size=6144
 
-# ── Run ────────────────────────────────────────────────────────────────────
-say "Starting with PM2"
-FIRST=0
-if pm2 describe pakhotels-api >/dev/null 2>&1; then
-  pm2 reload ecosystem.config.js --update-env
-else
-  FIRST=1
-  pm2 start ecosystem.config.js
-fi
-pm2 save
+# Starts a PM2 app, or reloads it when it is already running.
+up() {
+  if pm2 describe "$1" >/dev/null 2>&1; then
+    pm2 reload "$1" --update-env
+  else
+    pm2 start ecosystem.config.js --only "$1"
+  fi
+}
 
-# First deploy: the API was not running while the website was built, so the
-# static pages fell back to built-in text. Build the website once more now.
-if [ "$FIRST" = 1 ]; then
-  say "First deploy: rebuilding the website now that the API is up"
-  for i in $(seq 1 40); do curl -fsS -o /dev/null http://127.0.0.1:3120/api/hotels/cities && break; sleep 3; done
-  NODE_OPTIONS=--max-old-space-size=6144 npm run build --workspace=apps/web
-  pm2 reload pakhotels-web --update-env
-fi
+say "Building the API"
+npx turbo run build --filter=api...
 
-say "Checking"
-for i in $(seq 1 30); do
+say "Starting the API (port 3120)"
+up pakhotels-api
+API=""
+for i in $(seq 1 60); do
   if curl -fsS -o /dev/null http://127.0.0.1:3120/api/hotels/cities; then API=ok; break; fi
   sleep 3
 done
-WEB=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3119/ || true)
-echo "API (3120):     ${API:-not answering — run: pm2 logs pakhotels-api}"
-echo "Website (3119): ${WEB}"
+[ "$API" = ok ] || die "The API did not start on 3120 — see: pm2 logs pakhotels-api --lines 50"
+echo "API is answering."
+
+say "Building the website (a few minutes)"
+npx turbo run build --filter=web...
+
+say "Starting the website (port 3119)"
+up pakhotels-web
+pm2 save
+
+say "Checking"
+WEB=""
+for i in $(seq 1 20); do
+  WEB=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3119/ || true)
+  [ "$WEB" = 200 ] && break
+  sleep 3
+done
+echo "API (3120):     ok"
+echo "Website (3119): ${WEB} $( [ "$WEB" = 200 ] || echo '— see: pm2 logs pakhotels-web --lines 50')"
 echo
 echo "Done. Open https://pakhotels.pk"
